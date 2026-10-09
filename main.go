@@ -59,6 +59,8 @@ func main() {
 		err = cmdUI(os.Args[2:])
 	case "report":
 		err = cmdReport(os.Args[2:])
+	case "push":
+		err = cmdPush(os.Args[2:])
 	case "generators":
 		for _, a := range gen.Default() {
 			fmt.Printf("%-12s %s\n", a.Name, a.Notes)
@@ -122,6 +124,7 @@ Usage:
   sbomcmp scan [flags] <dir | image:NAME>
   sbomcmp ui   [flags]
   sbomcmp report [flags]
+  sbomcmp push [flags]            upload the recommended tool's SBOM to VDB (--watch: keep re-checking)
   sbomcmp generators
 
 Run "sbomcmp <command> -h" for flags.
@@ -152,11 +155,15 @@ func cmdScan(args []string) error {
 	vulnDetails := fs.Int("vuln-details", osv.DefaultMaxDetails, "max distinct advisories to fetch OSV details for (0 = unlimited)")
 	noMCP := fs.Bool("no-mcp", false, "skip MCP server discovery")
 	openUI := fs.Bool("ui", false, "open the viewer after scanning")
+	push, pushWatch := pushScanFlags(fs)
 	failLevel := fs.String("fail-on", "none", "exit 3 when an action at this level or above exists: none | warn | refuse")
 	quiet := fs.Bool("q", false, "quiet")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
 		return fmt.Errorf("scan needs exactly one target")
+	}
+	if *push || *pushWatch {
+		requireKey(*vulnKey)
 	}
 	if err := checkFailOn(*failLevel); err != nil {
 		return err
@@ -283,6 +290,9 @@ func cmdScan(args []string) error {
 	log(summaryLine(res))
 	log(fmt.Sprintf("wrote %s (raw SBOMs in %s/)", *out, *rawDir))
 
+	if err := pushAfterScan(res, *push, *pushWatch, *vdbAPI, *vulnKey); err != nil {
+		return err
+	}
 	if *openUI {
 		if err := ui.Serve(res, *out, 0, true); err != nil {
 			return err
