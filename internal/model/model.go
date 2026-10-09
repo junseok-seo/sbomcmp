@@ -28,6 +28,7 @@ type GeneratorRun struct {
 	Duration   time.Duration  `json:"-"`
 	DurationMS int64          `json:"durationMs"`
 	Error      string         `json:"error,omitempty"`
+	Note       string         `json:"note,omitempty"`    // non-fatal annotation (e.g. newer than the tested version)
 	RawPath    string         `json:"rawPath,omitempty"` // where the raw CycloneDX was saved
 	Format     string         `json:"format,omitempty"`  // cyclonedx-1.6 / spdx
 	Count      int            `json:"count"`

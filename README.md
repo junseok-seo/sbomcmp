@@ -140,7 +140,7 @@ The coverage matrix is derived from the run, never hard-coded, so it does not ro
 
 ## CI
 
-[`.github/workflows/sbomcmp.yml`](.github/workflows/sbomcmp.yml) installs the generators, scans on every PR, uploads the raw SBOMs, and posts (or updates) a single PR comment with the report. Copy it into any repository; add `VDB_API_KEY` as a repository secret to switch the vulnerability source to VDB.
+[`examples/sbomcmp-pr-comment.yml`](examples/sbomcmp-pr-comment.yml) installs the generators, scans on every PR, uploads the raw SBOMs, and posts (or updates) a single PR comment with the report. Copy it to `.github/workflows/` in any repository; add `VDB_API_KEY` as a repository secret to switch the vulnerability source to VDB.
 
 ## Development
 
@@ -150,6 +150,8 @@ make demo     # end-to-end with mock generators + offline vuln fixture, no netwo
 ```
 
 `testdata/mock-bin/` contains shell scripts named `syft`, `cdxgen`, `trivy` that emit realistic CycloneDX with each tool's known quirks (no lockfile → Trivy finds no npm; Syft keeps `Flask_Login`; cdxgen resolves transitives and marks dev scope). `testdata/fixtures/vulns.json` stands in for OSV/VDB. Together they let the whole pipeline run without installing anything.
+
+`testdata/golden/<tool>.keys` are normalized component-key snapshots of what each real generator currently reports for `testdata/sample-project`, written by the weekly [canary workflow](.github/workflows/canary.yml) that installs the latest syft, trivy, cdxgen and osv-scanner and asserts the adapters still work. When a release changes what a tool catalogues, the canary opens a snapshot PR with the diff instead of failing, so the change is reviewed rather than silently absorbed.
 
 ### Adding a generator
 

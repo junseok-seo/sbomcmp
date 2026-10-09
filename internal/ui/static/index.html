@@ -148,6 +148,7 @@ table.simple th{font-weight:600;border-bottom:1px solid var(--rule)}
 table.simple td.num{text-align:right;font-variant-numeric:tabular-nums}
 table.simple code{word-break:break-all}
 .err{color:var(--sev-high)}
+.note{color:var(--sev-med);font-size:12px}
 .ok{color:var(--muted)}
 footer{margin-top:40px;color:var(--muted);font-size:13px}
 @media (prefers-reduced-motion:no-preference){.detail td{animation:open .12s ease-out}}
@@ -417,7 +418,7 @@ function renderTools(){
   for(const g of R.generators||[]){
     const types=Object.entries(g.types||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${esc(k)} ${v}`).join(", ");
     const count=g.available&&!g.error?`${g.count}${g.skipped?` <span class="ok" title="version-less entries not comparable">(+${g.skipped} skipped)</span>`:""}`:"—";
-    h+=`<tr><td>${esc(g.name)}${g.format?`<br><span class="ok">${esc(g.format)}</span>`:""}</td><td>${esc(g.version||"—")}</td><td class="num">${count}</td><td>${types||"—"}</td><td class="num">${g.durationMs?g.durationMs+" ms":"—"}</td><td>${g.error?`<span class="err">${esc(g.error)}</span>`:`<code>${esc((g.command||[]).join(" "))}</code>${g.rawPath?` <a href="/api/raw/${esc(g.name)}" target="_blank">raw</a>`:""}`}</td></tr>`;
+    h+=`<tr><td>${esc(g.name)}${g.format?`<br><span class="ok">${esc(g.format)}</span>`:""}</td><td>${esc(g.version||"—")}${g.note?`<br><span class="note">${esc(g.note)}</span>`:""}</td><td class="num">${count}</td><td>${types||"—"}</td><td class="num">${g.durationMs?g.durationMs+" ms":"—"}</td><td>${g.error?`<span class="err">${esc(g.error)}</span>`:`<code>${esc((g.command||[]).join(" "))}</code>${g.rawPath?` <a href="/api/raw/${esc(g.name)}" target="_blank">raw</a>`:""}`}</td></tr>`;
   }
   h+=`</tbody></table>`;
   $("tools").innerHTML=h;

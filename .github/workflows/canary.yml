@@ -1,0 +1,192 @@
+# Upstream-drift canary. The generators are external binaries, not Go
+# dependencies, so a new syft/trivy/cdxgen/osv-scanner release can change a
+# flag, the output shape, or what gets catalogued without anything in this
+# repository changing. Once a week this installs the latest release of each,
+# scans the sample project and a small image, and checks the invariants in
+# internal/canary. A broken adapter opens (or refreshes) one issue; a change in
+# what a tool catalogues opens a snapshot PR instead of failing.
+name: canary
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write        # push canary/snapshots
+  issues: write          # drift issue
+  pull-requests: write   # snapshot PR
+
+concurrency:
+  group: canary
+  cancel-in-progress: false
+
+env:
+  IMAGE: alpine:3.20
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+
+      - name: Install latest generators
+        run: |
+          set -euo pipefail
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL -o /usr/local/bin/osv-scanner https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64
+          chmod +x /usr/local/bin/osv-scanner
+          npm install -g @cyclonedx/cdxgen
+          {
+            echo "## Installed generators"
+            echo
+            echo '```'
+            syft version -o text | sed -n 's/^Version: *//p' | sed 's/^/syft        /'
+            trivy --version | sed -n 's/^Version: *//p' | sed 's/^/trivy       /'
+            cdxgen --version | head -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^/cdxgen      /'
+            osv-scanner --version | head -1 | sed 's/^/osv-scanner /'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Build sbomcmp
+        run: go build -o "$HOME/go/bin/sbomcmp" . && echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: Pull image
+        run: docker pull "$IMAGE"
+
+      - name: Scan sample project
+        run: |
+          mkdir -p canary
+          sbomcmp scan --no-vuln -o canary/dir.json testdata/sample-project
+
+      - name: Scan image
+        run: sbomcmp scan --no-vuln -o canary/image.json "image:$IMAGE"
+
+      - name: Assert invariants
+        env:
+          # absolute: go test runs with the package directory as cwd
+          CANARY_DIR_RESULT: ${{ github.workspace }}/canary/dir.json
+          CANARY_IMAGE_RESULT: ${{ github.workspace }}/canary/image.json
+          CANARY_REPORT: ${{ github.workspace }}/canary/report.md
+        run: go test -tags canary -count=1 -v ./internal/canary
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f canary/report.md ]; then cat canary/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canary-results
+          path: canary/
+          if-no-files-found: ignore
+
+      # ---- normalized snapshots ------------------------------------------------
+
+      - name: Write normalized snapshots
+        id: snap
+        run: |
+          set -euo pipefail
+          mkdir -p testdata/golden
+          for t in $(jq -r '.generators[].name' canary/dir.json); do
+            jq -r --arg t "$t" '.rows[] | select(.cells[$t].found) | .key' canary/dir.json \
+              | LC_ALL=C sort > "testdata/golden/$t.keys"
+          done
+          git add -N testdata/golden
+          if git diff --quiet -- testdata/golden; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Normalized snapshots unchanged." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff -- testdata/golden > canary/snapshots.diff
+            {
+              echo "### Normalized snapshots changed"
+              echo
+              echo "The latest generator releases catalogue something different for \`testdata/sample-project\`. Not a failure; review the snapshot PR."
+              echo
+              echo '```diff'
+              head -c 60000 canary/snapshots.diff
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Open or update snapshot PR
+        if: steps.snap.outputs.changed == 'true'
+        continue-on-error: true   # a push/PR hiccup must not be reported as generator drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B canary/snapshots
+          git add testdata/golden
+          git commit -m "canary: update normalized snapshots ($(date -u +%Y-%m-%d))"
+          git push --force origin canary/snapshots
+          {
+            echo "<!-- sbomcmp-canary-snapshots -->"
+            echo "The weekly canary ran the latest generator releases against \`testdata/sample-project\` and the normalized component keys differ from the committed snapshots."
+            echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            if [ -f canary/report.md ]; then cat canary/report.md; fi
+            echo
+            echo '```diff'
+            head -c 60000 canary/snapshots.diff
+            echo '```'
+          } > canary/pr-body.md
+          existing=$(gh pr list --head canary/snapshots --base "$BASE" --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --body-file canary/pr-body.md
+            echo "Updated snapshot PR #$existing" >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh pr create --base "$BASE" --head canary/snapshots \
+              --title "canary: update normalized snapshots" --body-file canary/pr-body.md
+          fi
+
+      # ---- drift issue -----------------------------------------------------------
+
+      - name: Open or update drift issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- sbomcmp-canary -->';
+            const title = 'canary: generator drift';
+            let report = '';
+            try { report = fs.readFileSync('canary/report.md', 'utf8'); } catch {}
+            if (!report) report = '_No report was produced: the install or scan step itself failed. See the run log._';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = `${marker}\nThe weekly canary failed against the latest generator releases.\n\nRun: ${runUrl}\n\n${report}`;
+            const { data: issues } = await github.rest.issues.listForRepo({ ...context.repo, state: 'open', per_page: 100 });
+            const prev = issues.find(i => !i.pull_request && i.body && i.body.includes(marker));
+            if (prev) {
+              await github.rest.issues.update({ ...context.repo, issue_number: prev.number, title, body });
+              await github.rest.issues.createComment({ ...context.repo, issue_number: prev.number, body: `Still failing: ${runUrl}` });
+              core.summary.addRaw(`\nUpdated issue #${prev.number}\n`).write();
+            } else {
+              const { data: issue } = await github.rest.issues.create({ ...context.repo, title, body });
+              core.summary.addRaw(`\nOpened issue #${issue.number}\n`).write();
+            }
+
+      - name: Close drift issue when green
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- sbomcmp-canary -->';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: issues } = await github.rest.issues.listForRepo({ ...context.repo, state: 'open', per_page: 100 });
+            for (const i of issues.filter(i => !i.pull_request && i.body && i.body.includes(marker))) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: i.number, body: `Recovered: ${runUrl}` });
+              await github.rest.issues.update({ ...context.repo, issue_number: i.number, state: 'closed' });
+            }

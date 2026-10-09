@@ -34,18 +34,35 @@ type Adapter struct {
 	Env []string
 	// Notes is shown in the Runs tab (what the tool needs to do well).
 	Notes string
+	// TestedThrough is the newest upstream major.minor the weekly canary
+	// (.github/workflows/canary.yml) last passed with. A newer installed
+	// version still runs; the run is annotated so the result shows it.
+	TestedThrough string
 }
 
-var versionRe = regexp.MustCompile(`v?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?)`)
+var (
+	versionRe = regexp.MustCompile(`v?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?)`)
+	// ansiRe matches CSI escape sequences (colours, cursor moves) that some
+	// tools print even when stdout is not a terminal (cdxgen, syft errors).
+	ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+)
 
 func versionFromCmd(bin string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	out, _ := exec.CommandContext(ctx, bin, args...).CombinedOutput()
-	if m := versionRe.FindStringSubmatch(string(out)); len(m) > 1 {
+	return parseVersion(string(out))
+}
+
+// parseVersion extracts the first version-looking token from a tool's
+// version output, after stripping ANSI escape sequences. When nothing looks
+// like a version, the first line is returned so the failure is visible.
+func parseVersion(out string) string {
+	out = ansiRe.ReplaceAllString(out, "")
+	if m := versionRe.FindStringSubmatch(out); len(m) > 1 {
 		return m[1]
 	}
-	return strings.TrimSpace(firstLine(string(out)))
+	return strings.TrimSpace(firstLine(out))
 }
 
 func firstLine(s string) string {
@@ -61,7 +78,7 @@ func Default() []Adapter {
 		{
 			Name:     "syft",
 			Binaries: []string{"syft"},
-			Version:  func(bin string) string { return versionFromCmd(bin, "version", "-o", "raw") },
+			Version:  func(bin string) string { return versionFromCmd(bin, "version", "-o", "text") },
 			Args: func(target, kind, out string) ([]string, bool) {
 				src := target
 				if kind == "dir" {
@@ -69,8 +86,9 @@ func Default() []Adapter {
 				}
 				return []string{"scan", src, "--scope", "all-layers", "-o", "cyclonedx-json=" + out, "-q"}, false
 			},
-			Env:   []string{"SYFT_CHECK_FOR_APP_UPDATE=false"},
-			Notes: "reads manifests and lockfiles; strongest on container images and OS packages",
+			Env:           []string{"SYFT_CHECK_FOR_APP_UPDATE=false"},
+			Notes:         "reads manifests and lockfiles; strongest on container images and OS packages",
+			TestedThrough: "1.54",
 		},
 		{
 			Name:     "cdxgen",
@@ -82,8 +100,9 @@ func Default() []Adapter {
 				}
 				return []string{"-r", "-o", out, target}, false
 			},
-			Env:   []string{"CDXGEN_DEBUG_MODE=", "FETCH_LICENSE=false"},
-			Notes: "resolves transitive dependencies when the build tooling is installed",
+			Env:           []string{"CDXGEN_DEBUG_MODE=", "FETCH_LICENSE=false"},
+			Notes:         "resolves transitive dependencies when the build tooling is installed",
+			TestedThrough: "12.8",
 		},
 		{
 			Name:     "trivy",
@@ -96,8 +115,9 @@ func Default() []Adapter {
 				}
 				return []string{sub, "--format", "cyclonedx", "--output", out, "--quiet", "--scanners", "", "--skip-db-update", "--offline-scan", target}, false
 			},
-			Env:   []string{"TRIVY_DISABLE_VEX_NOTICE=true"},
-			Notes: "needs lockfiles for most language ecosystems (no package-lock.json → no npm)",
+			Env:           []string{"TRIVY_DISABLE_VEX_NOTICE=true"},
+			Notes:         "needs lockfiles for most language ecosystems (no package-lock.json → no npm)",
+			TestedThrough: "0.75",
 		},
 		{
 			Name:     "osv-scanner",
@@ -105,12 +125,17 @@ func Default() []Adapter {
 			Version:  func(bin string) string { return versionFromCmd(bin, "--version") },
 			Args: func(target, kind, out string) ([]string, bool) {
 				// osv-scanner always scans for vulnerabilities while producing the SBOM;
-				// sbomcmp reads only the component list from its output.
+				// sbomcmp reads only the component list from its output. Without
+				// --all-packages the export lists only the vulnerable packages. Its
+				// CycloneDX writer also drops OS packages (an image comes out with
+				// zero components), so images are read from the SPDX export, which
+				// carries the apk/deb/rpm purls.
 				if kind == "image" {
-					return []string{"scan", "image", "--format", "cyclonedx-1-5", "--output", out, target}, false
+					return []string{"scan", "image", "--all-packages", "--format", "spdx-2-3", "--output", out, target}, false
 				}
-				return []string{"scan", "source", "-r", "--format", "cyclonedx-1-5", "--output", out, target}, false
+				return []string{"scan", "source", "-r", "--all-packages", "--format", "cyclonedx-1-5", "--output", out, target}, false
 			},
+			TestedThrough: "2.6",
 		},
 	}
 }
@@ -192,6 +217,10 @@ func runOne(ctx context.Context, a Adapter, opt Options, path string) model.Gene
 	if a.Version != nil {
 		r.Version = a.Version(bin)
 	}
+	if NewerThanTested(r.Version, a.TestedThrough) {
+		r.Note = fmt.Sprintf("v%s is newer than the version sbomcmp was tested with (%s)", MajorMinor(r.Version), a.TestedThrough)
+		opt.Log(fmt.Sprintf("[%s] %s", a.Name, r.Note))
+	}
 
 	outPath := filepath.Join(opt.OutDir, a.Name+".cdx.json")
 	args, toStdout := a.Args(opt.Target, opt.Kind, outPath)
@@ -269,4 +298,38 @@ func Names(as []Adapter) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+var majorMinorRe = regexp.MustCompile(`^v?(\d+)\.(\d+)`)
+
+// MajorMinor reduces a version string such as "v1.54.1" to "1.54". It returns
+// "" when the string does not start with two numeric components.
+func MajorMinor(v string) string {
+	m := majorMinorRe.FindStringSubmatch(strings.TrimSpace(v))
+	if m == nil {
+		return ""
+	}
+	return m[1] + "." + m[2]
+}
+
+// NewerThanTested reports whether installed has a higher major.minor than
+// tested. Patch levels are ignored: a patch release of a tested minor is not
+// worth a note. Unparseable or empty versions never count as newer.
+func NewerThanTested(installed, tested string) bool {
+	im := majorMinorRe.FindStringSubmatch(strings.TrimSpace(installed))
+	tm := majorMinorRe.FindStringSubmatch(strings.TrimSpace(tested))
+	if im == nil || tm == nil {
+		return false
+	}
+	iMaj, iMin := atoi(im[1]), atoi(im[2])
+	tMaj, tMin := atoi(tm[1]), atoi(tm[2])
+	return iMaj > tMaj || (iMaj == tMaj && iMin > tMin)
+}
+
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
