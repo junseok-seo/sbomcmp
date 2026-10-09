@@ -65,15 +65,16 @@ type Row struct {
 
 // Vuln is a vulnerability hit from an OSV-compatible source.
 type Vuln struct {
-	ID       string   `json:"id"`
-	Aliases  []string `json:"aliases,omitempty"`
-	Summary  string   `json:"summary,omitempty"`
-	Severity string   `json:"severity,omitempty"` // normalized bucket
-	Score    float64  `json:"score,omitempty"`    // CVSS base score when known
-	Fixed    string   `json:"fixed,omitempty"`
-	KEV      bool     `json:"kev,omitempty"`  // CISA Known Exploited Vulnerabilities (VDB)
-	EPSS     float64  `json:"epss,omitempty"` // exploit probability 0–1 (VDB)
-	Source   string   `json:"source"`         // osv / vdb / fixture
+	ID        string   `json:"id"`
+	Aliases   []string `json:"aliases,omitempty"`
+	Summary   string   `json:"summary,omitempty"`
+	Severity  string   `json:"severity,omitempty"` // normalized bucket
+	Score     float64  `json:"score,omitempty"`    // CVSS base score when known
+	Fixed     string   `json:"fixed,omitempty"`
+	KEV       bool     `json:"kev,omitempty"`       // CISA Known Exploited Vulnerabilities (VDB)
+	EPSS      float64  `json:"epss,omitempty"`      // exploit probability 0–1 (VDB)
+	Malicious bool     `json:"malicious,omitempty"` // malicious-package report (MAL-*), not a vulnerability
+	Source    string   `json:"source"`              // osv / vdb / fixture
 }
 
 // Signal is a non-CVE risk signal (registry-missing name, MCP scope, etc.).
@@ -229,6 +230,16 @@ func (r Row) MaxEPSS() float64 {
 }
 
 // HasKEV reports whether any of the row's vulnerabilities is in CISA KEV.
+// HasMalicious reports whether any advisory on the row is a malicious-package report.
+func (r Row) HasMalicious() bool {
+	for _, v := range r.Vulns {
+		if v.Malicious {
+			return true
+		}
+	}
+	return false
+}
+
 func (r Row) HasKEV() bool {
 	for _, v := range r.Vulns {
 		if v.KEV {

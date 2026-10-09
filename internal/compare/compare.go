@@ -337,14 +337,20 @@ func Finalize(res *model.Result) {
 		}
 		rec.Caveats = append(rec.Caveats, msg)
 	}
-	var slop int
+	var slop, malicious int
 	for _, r := range res.Rows {
+		if r.HasMalicious() {
+			malicious++
+		}
 		for _, s := range r.Signals {
 			if s.Kind == "slopsquat" {
 				slop++
 				break
 			}
 		}
+	}
+	if malicious > 0 {
+		rec.Caveats = append(rec.Caveats, fmt.Sprintf("%d component version(s) are known malicious releases. Remove them before anything else; which tool found them is secondary.", malicious))
 	}
 	if slop > 0 {
 		rec.Caveats = append(rec.Caveats, fmt.Sprintf("%d component name(s) do not exist on their registry (possible slopsquatting). Check the Signals filter before trusting the manifest.", slop))

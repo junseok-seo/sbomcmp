@@ -113,6 +113,9 @@ func Markdown(res *model.Result, maxRows int) string {
 			var ids []string
 			for _, v := range r.Vulns {
 				id := v.ID
+				if v.Malicious {
+					id += " (MALICIOUS)"
+				}
 				if v.KEV {
 					id += " (KEV)"
 				}

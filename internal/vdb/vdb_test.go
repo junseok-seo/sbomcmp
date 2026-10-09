@@ -24,6 +24,13 @@ const liveShape = `{"results":[
   "registry":{"ecosystem":"npm","name":"@modelcontextprotocol/server-filesystem","exists":true,"risk_hint":"low"},
   "mcp":{"id":"mcp:anthropic/filesystem","display_name":"Filesystem (Anthropic)","trust_tier":"official","scopes":["fs:read","fs:write"],"risk_score":0.12,"risk_notes":"Can write to the host filesystem.","scope_drift":null},
   "vulnerabilities":[],"vulnerabilities_total":0,"agent_action":"PROCEED","because":"no known advisory or slop signal"}
+,
+ {"input":"pkg:npm/chalk@2.4.2","purl":"pkg:npm/chalk@2.4.2","version":"2.4.2","matched":true,"risk":"high","flags":[],"registry":null,"mcp":null,
+  "vulnerabilities":[{"id":"MAL-2025-46969","summary":"Malicious code in chalk (npm)","severity_bucket":"critical","severity_score":null,"fixed_in":[],"kev":false,"epss":null,"malicious":true,"severity_source":"malicious"}],
+  "vulnerabilities_total":1,"worst_bucket":"critical","malicious":true,"agent_action":"REFUSE","because":"MAL-2025-46969 is a malicious package report"},
+ {"input":"pkg:npm/trunc@1","purl":"pkg:npm/trunc@1","version":"1","matched":true,"risk":"high","flags":[],"registry":null,"mcp":null,
+  "vulnerabilities":[{"id":"GHSA-low","severity_bucket":"low","severity_score":3.1,"fixed_in":["2"],"kev":false,"epss":0.9}],
+  "vulnerabilities_total":4,"worst_bucket":"critical","agent_action":"REFUSE","because":"x"}
 ],"agent_action":"REFUSE","anonymous":{"authenticated":false,"limit_per_hour":20,"remaining":19,"resets_in_seconds":1479}}`
 
 func TestCheckParsesLiveShapeAndBatches(t *testing.T) {
@@ -42,18 +49,38 @@ func TestCheckParsesLiveShapeAndBatches(t *testing.T) {
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		sizes = append(sizes, len(req.Packages))
-		w.Write([]byte(liveShape))
+		// Answer aligned with the request, like VDB does.
+		var canned struct {
+			Results   []json.RawMessage `json:"results"`
+			Anonymous json.RawMessage   `json:"anonymous"`
+		}
+		json.Unmarshal([]byte(liveShape), &canned)
+		byInput := map[string]json.RawMessage{}
+		for _, raw := range canned.Results {
+			var r struct{ Input string }
+			json.Unmarshal(raw, &r)
+			byInput[r.Input] = raw
+		}
+		out := []json.RawMessage{}
+		for _, pkg := range req.Packages {
+			if raw, ok := byInput[pkg]; ok {
+				out = append(out, raw)
+			} else {
+				out = append(out, json.RawMessage(`{"input":"`+pkg+`","risk":"unknown"}`))
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"results": out, "agent_action": "REFUSE", "anonymous": canned.Anonymous})
 	}))
 	defer srv.Close()
 
 	c := New(srv.URL, "", 0)
 	c.Batch = 3
-	purls := []string{"pkg:npm/qs@6.11.0", "pkg:npm/requests-toolkit-pro@1.2.0", "pkg:npm/@modelcontextprotocol/server-filesystem", "pkg:npm/x@1"}
+	purls := []string{"pkg:npm/qs@6.11.0", "pkg:npm/requests-toolkit-pro@1.2.0", "pkg:npm/@modelcontextprotocol/server-filesystem", "pkg:npm/chalk@2.4.2", "pkg:npm/trunc@1", "pkg:npm/x@1"}
 	res, quota, err := c.Check(context.Background(), purls)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 2 || sizes[0] != 3 || sizes[1] != 1 {
+	if calls != 2 || sizes[0] != 3 || sizes[1] != 3 {
 		t.Fatalf("batching: calls=%d sizes=%v", calls, sizes)
 	}
 	if quota == nil || quota.Remaining != 19 {
@@ -74,6 +101,16 @@ func TestCheckParsesLiveShapeAndBatches(t *testing.T) {
 	}
 	if s := Signals(res[2]); len(s) != 1 || s[0].Kind != "mcp" || s[0].Level != "info" {
 		t.Fatalf("mcp signal: %+v", s)
+	}
+	mal := model.Row{Key: "npm/chalk@2.4.2"}
+	Apply(&mal, res[3])
+	if !mal.HasMalicious() || mal.MaxSev != "CRITICAL" || len(mal.Signals) != 1 || mal.Signals[0].Kind != "malicious" || mal.Signals[0].Level != "refuse" {
+		t.Fatalf("malicious row: %+v", mal)
+	}
+	tr := model.Row{Key: "npm/trunc@1"}
+	Apply(&tr, res[4])
+	if tr.MaxSev != "CRITICAL" || tr.VulnTotal != 4 || len(tr.Vulns) != 1 {
+		t.Fatalf("worst_bucket should raise MaxSev over the truncated list: %+v", tr)
 	}
 }
 

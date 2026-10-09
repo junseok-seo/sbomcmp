@@ -253,6 +253,7 @@ function renderVerdict(){
 
 const maxEPSS=r=>Math.max(0,...(r.vulns||[]).map(v=>v.epss||0));
 const hasKEV=r=>(r.vulns||[]).some(v=>v.kev);
+const hasMal=r=>(r.vulns||[]).some(v=>v.malicious);
 
 function renderVStatus(){
   const v=R.vuln||{}, el=$("vstatus"), src=v.source||"none";
@@ -275,6 +276,8 @@ function renderVStatus(){
     const mcp=(R.mcpServers||[]).filter(m=>m.registry&&m.registry.trustTier!=="unverified").length;
     const parts=[];
     const n=(c,w)=>`<strong>${c}</strong> ${w}${c===1?"":"s"}`;
+    const mal=R.rows.filter(hasMal).length;
+    if(mal)parts.push(n(mal,"malicious release"));
     if(kev)parts.push(n(kev,"KEV row"));
     if(epss)parts.push(n(epss,"row")+" with EPSS ≥ 10%");
     if(slop)parts.push(n(slop,"slopsquat signal"));
@@ -333,7 +336,7 @@ function renderMatrix(){
       }
     }
     h+=`<td class="vul">`;
-    if(sev)h+=`<span class="pill sev-${esc(sev)}">${esc(sev)}</span> ${r.vulnTotal&&r.vulnTotal>(r.vulns||[]).length?r.vulnTotal:(r.vulns||[]).length}${hasKEV(r)?' <span class="pill sig refuse" title="CISA Known Exploited Vulnerabilities">KEV</span>':''}${maxEPSS(r)>0?` <span class="ok" title="EPSS: probability of exploitation in the next 30 days">EPSS ${(maxEPSS(r)*100).toFixed(1)}%</span>`:''}`;
+    if(sev)h+=`<span class="pill sev-${esc(sev)}">${esc(sev)}</span> ${r.vulnTotal&&r.vulnTotal>(r.vulns||[]).length?r.vulnTotal:(r.vulns||[]).length}${hasMal(r)?' <span class="pill sig refuse" title="Known malicious package release">MALICIOUS</span>':''}${hasKEV(r)?' <span class="pill sig refuse" title="CISA Known Exploited Vulnerabilities">KEV</span>':''}${maxEPSS(r)>0?` <span class="ok" title="EPSS: probability of exploitation in the next 30 days">EPSS ${(maxEPSS(r)*100).toFixed(1)}%</span>`:''}`;
     for(const s of r.signals||[])h+=` <span class="pill sig ${esc(s.level)}">${esc(s.kind)}</span>`;
     h+=`</td><td class="why">${esc((r.reasons||[]).map(x=>x.split(":")[0]).filter((v,i,a)=>a.indexOf(v)===i).join(", "))}</td></tr>`;
   }
@@ -352,7 +355,7 @@ function detailRow(r){
   if(r.vulns&&r.vulns.length){
     h+=`<div class="vul">`;
     for(const v of r.vulns){
-      h+=`<div><span class="pill sev-${esc(v.severity||"UNKNOWN")}">${esc(v.severity||"UNKNOWN")}</span>${v.score?` <span class="ok">${v.score.toFixed(1)}</span>`:""} <code>${esc(v.id)}</code>${v.kev?' <span class="pill sig refuse">KEV</span>':''}${v.epss?` <span class="ok">EPSS ${(v.epss*100).toFixed(1)}%</span>`:''}${v.aliases&&v.aliases.length?` <span class="ok">${esc(v.aliases.join(", "))}</span>`:""}${v.fixed?` · fixed in ${esc(v.fixed)}`:""}${v.summary?`<br><span class="ok">${esc(v.summary)}</span>`:""} <span class="ok">(${esc(v.source)})</span></div>`;
+      h+=`<div><span class="pill sev-${esc(v.severity||"UNKNOWN")}">${esc(v.severity||"UNKNOWN")}</span>${v.score?` <span class="ok">${v.score.toFixed(1)}</span>`:""} <code>${esc(v.id)}</code>${v.malicious?' <span class="pill sig refuse">MALICIOUS</span>':''}${v.kev?' <span class="pill sig refuse">KEV</span>':''}${v.epss?` <span class="ok">EPSS ${(v.epss*100).toFixed(1)}%</span>`:''}${v.aliases&&v.aliases.length?` <span class="ok">${esc(v.aliases.join(", "))}</span>`:""}${v.fixed?` · fixed in ${esc(v.fixed)}`:""}${v.summary?`<br><span class="ok">${esc(v.summary)}</span>`:""} <span class="ok">(${esc(v.source)})</span></div>`;
     }
     if(r.vulnTotal&&r.vulnTotal>r.vulns.length)h+=`<div class="ok">+${r.vulnTotal-r.vulns.length} more advisories not listed by the source</div>`;
     h+=`</div>`;

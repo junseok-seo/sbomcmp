@@ -71,6 +71,7 @@ type Result struct {
 	Model       *Model    `json:"model"`
 	Vulns       []VulnHit `json:"vulnerabilities"`
 	VulnsTotal  int       `json:"vulnerabilities_total"`
+	WorstBucket string    `json:"worst_bucket"` // worst severity across all advisories, including truncated ones
 }
 
 // Flag is a slopsquatting advisory attached to the exact purl.
@@ -123,6 +124,7 @@ type VulnHit struct {
 	FixedIn        []string `json:"fixed_in"`
 	KEV            bool     `json:"kev"`
 	EPSS           *float64 `json:"epss"`
+	Malicious      bool     `json:"malicious"`
 }
 
 // Quota is the anonymous-usage block VDB appends when no key was sent.
@@ -210,7 +212,7 @@ func Apply(row *model.Row, r *Result) {
 	}
 	for _, v := range r.Vulns {
 		mv := model.Vuln{ID: v.ID, Summary: truncate(v.Summary, 160), Severity: bucket(v.SeverityBucket),
-			Score: v.SeverityScore, KEV: v.KEV, Source: "vdb"}
+			Score: v.SeverityScore, KEV: v.KEV, Malicious: v.Malicious, Source: "vdb"}
 		if len(v.FixedIn) > 0 {
 			mv.Fixed = v.FixedIn[0]
 		}
@@ -223,6 +225,10 @@ func Apply(row *model.Row, r *Result) {
 		row.VulnTotal = r.VulnsTotal
 	}
 	row.MaxSev = model.MaxSeverity(row.Vulns)
+	// The list is truncated to the top few; worst_bucket covers the rest.
+	if wb := bucket(r.WorstBucket); r.WorstBucket != "" && model.SeverityRank[wb] > model.SeverityRank[row.MaxSev] {
+		row.MaxSev = wb
+	}
 	row.Signals = append(row.Signals, Signals(r)...)
 }
 
@@ -231,6 +237,13 @@ func Signals(r *Result) []model.Signal {
 	var out []model.Signal
 	if r == nil {
 		return nil
+	}
+	for _, v := range r.Vulns {
+		if v.Malicious {
+			out = append(out, model.Signal{Kind: "malicious", Level: "refuse", Source: "vdb",
+				Message: v.ID + ": this package version is a known malicious release — remove it, do not upgrade around it"})
+			break
+		}
 	}
 	if r.Registry != nil && r.Registry.RiskHint == "not_found" {
 		out = append(out, model.Signal{Kind: "slopsquat", Level: "refuse", Source: "vdb",
