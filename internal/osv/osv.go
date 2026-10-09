@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,12 +24,25 @@ import (
 // DefaultEndpoint is the public OSV API.
 const DefaultEndpoint = "https://api.osv.dev"
 
+// DefaultMaxDetails is the default cap on distinct advisories whose details
+// are fetched per scan. api.osv.dev answers /v1/vulns/{id} in about 100 ms, so
+// 600 fetches at DefaultConcurrency take a few seconds.
+const DefaultMaxDetails = 600
+
+// DefaultConcurrency is the number of detail fetches in flight at once.
+const DefaultConcurrency = 16
+
 // Client queries one OSV-compatible server.
 type Client struct {
-	Endpoint   string
-	APIKey     string // optional bearer token
-	HTTP       *http.Client
-	MaxDetails int // cap on per-vuln detail fetches
+	Endpoint    string
+	APIKey      string // optional bearer token
+	HTTP        *http.Client
+	MaxDetails  int // cap on distinct advisories fetched (0 = unlimited)
+	Concurrency int // parallel detail fetches (0 = DefaultConcurrency)
+
+	// backoff holds the pauses before each retry of a detail fetch that was
+	// rate limited (HTTP 429) or failed in transport. Tests shorten it.
+	backoff []time.Duration
 }
 
 // New returns a client with sane defaults.
@@ -40,8 +54,11 @@ func New(endpoint, apiKey string, timeout time.Duration) *Client {
 		timeout = 30 * time.Second
 	}
 	return &Client{Endpoint: strings.TrimRight(endpoint, "/"), APIKey: apiKey,
-		HTTP: &http.Client{Timeout: timeout}, MaxDetails: 80}
+		HTTP: &http.Client{Timeout: timeout}, MaxDetails: DefaultMaxDetails, Concurrency: DefaultConcurrency,
+		backoff: defaultBackoff}
 }
+
+var defaultBackoff = []time.Duration{time.Second, 2 * time.Second}
 
 type batchResp struct {
 	Results []struct {
@@ -168,21 +185,75 @@ func (c *Client) do(ctx context.Context, method, url string, body []byte) ([]byt
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(strings.TrimSpace(string(data)), 200))
+		return nil, &httpError{code: resp.StatusCode, body: truncate(strings.TrimSpace(string(data)), 200)}
 	}
 	return data, nil
 }
 
-// Stats describes what one Enrich call managed to do.
-type Stats struct {
-	Answered      int // rows the batch query answered (all of them, or none on error)
-	DetailsCapped int // advisories left at UNKNOWN because MaxDetails was hit
+// httpError is a non-2xx answer. Transport failures are returned as-is.
+type httpError struct {
+	code int
+	body string
 }
 
-// Enrich fills rows[idx] with vulnerabilities. Detail fetches are capped at
-// MaxDetails and prioritize rows the tools disagree on, because those drive
-// the recommendation; the rest keep IDs only with UNKNOWN severity, and
-// Stats.DetailsCapped says how many.
+func (e *httpError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.code, e.body) }
+
+// retryable reports whether a detail fetch error is worth another attempt:
+// rate limiting and transport failures are; a 404 or a decode error is not.
+func retryable(err error) bool {
+	var he *httpError
+	if errors.As(err, &he) {
+		return he.code == http.StatusTooManyRequests
+	}
+	var je *json.SyntaxError
+	if errors.As(err, &je) {
+		return false
+	}
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+// detailWithRetry fetches one record, pausing c.backoff[0], c.backoff[1], …
+// between attempts that were rate limited or failed in transport, and gives
+// up on the ID once the pauses run out.
+func (c *Client) detailWithRetry(ctx context.Context, id string) (*Vuln, error) {
+	waits := c.backoff
+	if waits == nil {
+		waits = defaultBackoff
+	}
+	for attempt := 0; ; attempt++ {
+		d, err := c.Detail(ctx, id)
+		if err == nil {
+			return d, nil
+		}
+		if attempt >= len(waits) || !retryable(err) || ctx.Err() != nil {
+			return nil, err
+		}
+		select {
+		case <-time.After(waits[attempt]):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// Stats describes what one Enrich call managed to do.
+type Stats struct {
+	Answered int // rows the batch query answered (all of them, or none on error)
+	// Advisories counts distinct advisory IDs the batch query returned;
+	// Scored is how many of them got a detail record.
+	Advisories int
+	Scored     int
+	// DetailsCapped counts distinct advisories left at UNKNOWN: those past
+	// MaxDetails plus those whose fetch failed (DetailsFailed is the latter).
+	DetailsCapped int
+	DetailsFailed int
+}
+
+// Enrich fills rows[idx] with vulnerabilities. Detail fetches cover at most
+// MaxDetails distinct advisories and take rows the tools disagree on first,
+// because those drive the recommendation; advisories past the cap, and those
+// whose fetch failed even after retries, keep their ID with UNKNOWN severity
+// and are counted in Stats.DetailsCapped.
 func (c *Client) Enrich(ctx context.Context, rows []model.Row, idx []int, purlFor func(model.Row) string, source string) (Stats, error) {
 	var st Stats
 	purls := make([]string, len(idx))
@@ -206,50 +277,53 @@ func (c *Client) Enrich(ctx context.Context, rows []model.Row, idx []int, purlFo
 		ra, rb := rows[refs[a].row].Agreement == "all", rows[refs[b].row].Agreement == "all"
 		return !ra && rb
 	})
-	all := refs
-	if c.MaxDetails > 0 && len(refs) > c.MaxDetails {
-		refs = refs[:c.MaxDetails]
-	}
-	// One detail per distinct ID; the same advisory often hits several rows.
+	// One detail per distinct ID, in disagreement-first order; the same
+	// advisory often hits several rows and must count once against the cap.
+	var order []string
 	details := map[string]*Vuln{}
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
 	for _, rf := range refs {
 		id := rows[rf.row].Vulns[rf.vi].ID
-		mu.Lock()
-		_, seen := details[id]
-		if !seen {
-			details[id] = nil
-		}
-		mu.Unlock()
-		if seen {
+		if _, seen := details[id]; seen {
 			continue
 		}
+		details[id] = nil
+		order = append(order, id)
+	}
+	st.Advisories = len(order)
+	fetch := order
+	if c.MaxDetails > 0 && len(fetch) > c.MaxDetails {
+		fetch = fetch[:c.MaxDetails]
+	}
+	conc := c.Concurrency
+	if conc <= 0 {
+		conc = DefaultConcurrency
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, conc)
+	for _, id := range fetch {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			d, err := c.Detail(ctx, id)
+			d, err := c.detailWithRetry(ctx, id)
+			mu.Lock()
+			defer mu.Unlock()
 			if err != nil {
+				st.DetailsFailed++
 				return
 			}
-			mu.Lock()
 			details[id] = d
-			mu.Unlock()
 		}(id)
 	}
 	wg.Wait()
-	// Apply to every reference, including those past the cap: an advisory
-	// fetched for one row is good for every row it hits.
-	for k, rf := range all {
+	st.Scored = len(fetch) - st.DetailsFailed
+	st.DetailsCapped = st.Advisories - st.Scored
+	for _, rf := range refs {
 		v := &rows[rf.row].Vulns[rf.vi]
 		d := details[v.ID]
 		if d == nil {
-			if k >= len(refs) {
-				st.DetailsCapped++
-			}
 			continue
 		}
 		v.Aliases = d.Aliases
