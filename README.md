@@ -149,6 +149,8 @@ make demo     # end-to-end with mock generators + offline vuln fixture, no netwo
 
 `testdata/mock-bin/` contains shell scripts named `syft`, `cdxgen`, `trivy` that emit realistic CycloneDX with each tool's known quirks (no lockfile → Trivy finds no npm; Syft keeps `Flask_Login`; cdxgen resolves transitives and marks dev scope). `testdata/fixtures/vulns.json` stands in for OSV/VDB. Together they let the whole pipeline run without installing anything.
 
+`testdata/golden/<tool>.keys` are normalized component-key snapshots of what each real generator currently reports for `testdata/sample-project`, written by the weekly [canary workflow](.github/workflows/canary.yml) that installs the latest syft, trivy, cdxgen and osv-scanner and asserts the adapters still work. When a release changes what a tool catalogues, the canary opens a snapshot PR with the diff instead of failing, so the change is reviewed rather than silently absorbed.
+
 ### Adding a generator
 
 Add one `Adapter` in [`internal/gen/gen.go`](internal/gen/gen.go): binary names, a version probe, and a function that builds the argv for a directory or image target. If the tool only writes SPDX, that still works.

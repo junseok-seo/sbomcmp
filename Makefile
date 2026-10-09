@@ -13,6 +13,7 @@ fmt:
 
 test:
 	go vet ./...
+	go vet -tags canary ./internal/canary
 	go test ./...
 
 # End-to-end run with the mock generators and the offline vulnerability fixture.
