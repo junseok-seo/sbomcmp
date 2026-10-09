@@ -186,3 +186,137 @@ func TestFinalizeExplainsIncompleteEnrichment(t *testing.T) {
 		t.Fatalf("missing generic caveat: %v", cs)
 	}
 }
+
+func TestFinalizeBuildsActions(t *testing.T) {
+	gens := []model.GeneratorRun{{Name: "syft", Available: true}, {Name: "trivy", Available: true}}
+	row := func(key string) model.Row {
+		return model.Row{Key: key, Type: "npm", Name: key, Agreement: "single", FoundBy: []string{"syft"},
+			Cells: map[string]model.Cell{"syft": {Found: true}, "trivy": {}}}
+	}
+	mal := row("npm/evil@1.0.0")
+	mal.Vulns = []model.Vuln{{ID: "MAL-2025-1", Malicious: true, Severity: "CRITICAL"}}
+	kev := row("npm/kev@2.0.0")
+	kev.Vulns = []model.Vuln{{ID: "CVE-K", Severity: "MEDIUM", KEV: true, EPSS: 0.42, Fixed: "2.0.1"}}
+	epssLow := row("npm/epss-low@1.0.0")
+	epssLow.Vulns = []model.Vuln{{ID: "CVE-E1", Severity: "HIGH", EPSS: 0.12, Fixed: "1.0.9"}}
+	epssHigh := row("npm/epss-high@1.0.0")
+	epssHigh.Vulns = []model.Vuln{{ID: "CVE-E2", Severity: "LOW", EPSS: 0.55}}
+	quiet := row("npm/quiet@1.0.0")
+	quiet.Vulns = []model.Vuln{{ID: "CVE-Q", Severity: "CRITICAL", EPSS: 0.01}}
+	slop := row("npm/requests-toolkit-pro@1.2.0")
+	slop.Signals = []model.Signal{{Kind: "slopsquat", Level: "refuse", Source: "vdb", Message: "no such name on npm"}}
+	own := row("npm/our-internal-lib@0.1.0")
+	own.FirstParty = true
+	own.Signals = []model.Signal{{Kind: "slopsquat", Level: "refuse", Source: "vdb"}}
+
+	servers := []model.MCPServer{
+		{Name: "filesystem", Registry: &model.MCPRegistry{TrustTier: "official", Scopes: []string{"fs:read", "fs:write"}}},
+		{Name: "browser", Registry: &model.MCPRegistry{TrustTier: "community", Scopes: []string{"net:outbound", "exec"}, ScopeDrift: "+exec"}},
+		{Name: "github", Registry: &model.MCPRegistry{TrustTier: "unverified"},
+			Signals: []model.Signal{{Kind: "mcp", Level: "warn", Message: "unverified publisher"}}},
+		{Name: "danger", Registry: &model.MCPRegistry{TrustTier: "official"},
+			Signals: []model.Signal{{Kind: "advisory", Level: "refuse", Message: "CVE-X (critical) affects 1.0"}}},
+	}
+	// Row order on input is deliberately scrambled; the action order must not follow it.
+	res := &model.Result{Generators: gens, Rows: []model.Row{quiet, slop, epssLow, own, kev, epssHigh, mal}, MCP: servers,
+		Vuln: model.VulnMeta{Enabled: true, Source: "vdb", Queried: 7, Answered: 7}}
+	Finalize(res)
+
+	var got []string
+	for _, a := range res.Actions {
+		got = append(got, a.Kind+" "+a.Level+" "+a.Key+" → "+a.Fix)
+	}
+	want := []string{
+		"malicious refuse npm/evil@1.0.0 → remove",
+		"kev refuse npm/kev@2.0.0 → upgrade to 2.0.1",
+		"epss warn npm/epss-high@1.0.0 → upgrade (no fixed version published yet)",
+		"epss warn npm/epss-low@1.0.0 → upgrade to 1.0.9",
+		"slopsquat refuse npm/requests-toolkit-pro@1.2.0 → check the name",
+		"mcp warn browser → pin and review the server",
+		"mcp refuse danger → pin and review the server",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("actions:\n got %q\nwant %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("action %d:\n got %q\nwant %q", i, got[i], want[i])
+		}
+	}
+	if res.ActionTotal != len(want) {
+		t.Fatalf("ActionTotal %d, want %d", res.ActionTotal, len(want))
+	}
+	if a := res.Actions[1]; !contains(a.Message, "CVE-K") || !contains(a.Message, "KEV") || !contains(a.Message, "EPSS 42%") {
+		t.Fatalf("KEV message: %q", a.Message)
+	}
+	if a := res.Actions[5]; !contains(a.Message, "trust community") || !contains(a.Message, "scopes net:outbound exec") || !contains(a.Message, "scope drift +exec") {
+		t.Fatalf("MCP message: %q", a.Message)
+	}
+	if a := res.Actions[4]; a.Message != "no such name on npm" {
+		t.Fatalf("slopsquat message should carry the signal text: %q", a.Message)
+	}
+
+	// The slopsquat row gets a reason the Why column can show; first-party does not.
+	slopRow := rowByKey(res.Rows, "npm/requests-toolkit-pro@1.2.0")
+	if len(slopRow.Reasons) != 1 || slopRow.Reasons[0] != "hallucinated-name: not on the npm registry (VDB); tools differ on unresolvable dependencies" {
+		t.Fatalf("slopsquat reason: %v", slopRow.Reasons)
+	}
+	if r := rowByKey(res.Rows, "npm/our-internal-lib@0.1.0"); len(r.Reasons) != 0 {
+		t.Fatalf("first-party row must not get the reason: %v", r.Reasons)
+	}
+	// Finalize is idempotent for the reason.
+	Finalize(res)
+	if n := len(rowByKey(res.Rows, "npm/requests-toolkit-pro@1.2.0").Reasons); n != 1 {
+		t.Fatalf("reason duplicated: %d", n)
+	}
+
+	if got := res.ActionsAtLeast("refuse"); len(got) != 4 {
+		t.Fatalf("ActionsAtLeast(refuse) = %d, want 4", len(got))
+	}
+	if got := res.ActionsAtLeast("warn"); len(got) != 7 {
+		t.Fatalf("ActionsAtLeast(warn) = %d, want 7", len(got))
+	}
+	if got := res.ActionsAtLeast("none"); got != nil {
+		t.Fatalf("ActionsAtLeast(none) = %v", got)
+	}
+}
+
+func TestActionsCap(t *testing.T) {
+	var rows []model.Row
+	for i := 0; i < model.MaxActions+5; i++ {
+		rows = append(rows, model.Row{Key: "npm/p" + string(rune('a'+i%26)) + "@1", Type: "npm", Agreement: "single",
+			Vulns: []model.Vuln{{ID: "CVE", EPSS: 0.2 + float64(i)/100}}})
+	}
+	// One malicious row buried at the end must still come first.
+	rows = append(rows, model.Row{Key: "npm/evil@1", Type: "npm", Agreement: "single", Vulns: []model.Vuln{{ID: "MAL", Malicious: true}}})
+	acts, total := actions(rows, nil)
+	if len(acts) != model.MaxActions || total != model.MaxActions+6 {
+		t.Fatalf("len %d total %d", len(acts), total)
+	}
+	if acts[0].Kind != "malicious" || acts[1].Key != rows[model.MaxActions+4].Key {
+		t.Fatalf("order: %+v %+v", acts[0], acts[1])
+	}
+}
+
+func TestDemoFixtureActions(t *testing.T) {
+	// The demo path: mock generators + the offline fixture (which stands in
+	// for VDB and therefore sets vdbExtras).
+	runs := loadMock(t)
+	rows, pairs := Build(runs)
+	for i := range rows {
+		if rows[i].Key == "npm/requests-toolkit-pro@1.2.0" {
+			rows[i].Signals = []model.Signal{{Kind: "slopsquat", Level: "refuse", Source: "vdb", Message: "no such name on the npm registry"}}
+		}
+	}
+	res := &model.Result{Generators: runs, Rows: rows, Pairs: pairs,
+		MCP: []model.MCPServer{{Name: "browser", Package: "pkg:pypi/mcp-server-browser",
+			Registry: &model.MCPRegistry{TrustTier: "community", Scopes: []string{"net:outbound", "exec"}, ScopeDrift: "+exec (2026-09-12)"}}},
+		Vuln: model.VulnMeta{Enabled: true, Source: "fixture", VDBExtras: true}}
+	Finalize(res)
+	if len(res.Actions) != 2 || res.Actions[0].Kind != "slopsquat" || res.Actions[1].Kind != "mcp" || res.Actions[1].Key != "browser" {
+		t.Fatalf("demo actions: %+v", res.Actions)
+	}
+	if !res.VDBSignalsActive() {
+		t.Fatal("fixture with vdbExtras must count as VDB-active")
+	}
+}

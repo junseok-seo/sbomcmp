@@ -77,6 +77,7 @@ sbomcmp scan --ui ./repo                  # open the viewer when done
 sbomcmp ui                                # viewer for ./sbomcmp.json
 sbomcmp report --format md                # Markdown (PR comments, CI logs)
 sbomcmp report --format json              # the full result
+sbomcmp report --fail-on refuse           # CI gate: exit 3 when VDB-only findings need a decision
 ```
 
 Output: `sbomcmp.json` (the comparison) and `sbomcmp.raw/<tool>.cdx.json` (each tool's untouched SBOM, so nothing is lost).
@@ -116,6 +117,8 @@ With VDB active:
 - Discovered MCP servers get a **Registry** column: trust tier, scopes, risk score, and recent scope changes. Servers VDB has never seen are marked unverified.
 - Advisories carry **KEV** and **EPSS** so a critical nobody exploits ranks below a medium that is being exploited, and **malicious releases** (MAL-* reports) are flagged as something to remove, not upgrade. The viewer sorts by KEV, then EPSS, then severity when VDB data is present, and the report's "Disagreements that matter" table gains an EPSS column.
 
+The VDB-only findings drive the first screen. Under the recommendation, an **Act now** block (viewer, Markdown report, scan summary) lists what to decide before trusting the manifest, in this order: malicious releases (remove), advisories in CISA KEV (upgrade to the fixed version), advisories with EPSS ≥ 10% (upgrade), names no registry resolves (check the name), and MCP servers that are unverified or community-tier with an `exec`, `fs:write`, `net:outbound` or `secret:read` scope, or that carry a refuse-level signal (pin and review). Each action is `refuse` or `warn`, the list is capped at 20 with the total kept, and it is stored as `actions` in the result file. Rows with a slopsquat signal also get a `hallucinated-name` reason in the "Why tools disagree" column. Without VDB the block is one line saying those signals need VDB; with VDB and nothing to act on it says so explicitly.
+
 Coverage is always visible: the status strip under the verdict (and the `Vulnerability data:` line in the report) says which source answered, keyed or anonymous, how many of the queried rows got an answer, and what VDB added (KEV rows, rows with EPSS ≥ 10%, slopsquat signals, MCP registry hits). When the anonymous quota runs out mid-scan the strip turns amber and shows the fix; the same shortfall appears as a recommendation caveat. OSV runs log `osv: N of M advisories scored`; advisories past the detail cap or whose fetch failed after retries are counted and shown as UNKNOWN.
 
 Without a key, sbomcmp behaves exactly as before against public OSV. `VDB_API_URL` or `--vdb-api` points at a self-hosted deployment.
@@ -142,6 +145,16 @@ The coverage matrix is derived from the run, never hard-coded, so it does not ro
 ## CI
 
 [`examples/sbomcmp-pr-comment.yml`](examples/sbomcmp-pr-comment.yml) installs the generators, scans on every PR, uploads the raw SBOMs, and posts (or updates) a single PR comment with the report. Copy it to `.github/workflows/` in any repository; add `VDB_API_KEY` as a repository secret to switch the vulnerability source to VDB.
+
+To turn the **Act now** list into a gate, add `--fail-on`:
+
+```sh
+sbomcmp report -i sbomcmp.json --fail-on refuse   # exit 3 on malicious releases, KEV, refuse-level names or MCP servers
+sbomcmp report -i sbomcmp.json --fail-on warn     # also EPSS ≥ 10% and warn-level signals
+sbomcmp scan --fail-on refuse ./repo              # same gate right after the scan (the result file is still written)
+```
+
+The default is `none`. When the gate trips, the actions are printed to stderr and the exit status is 3 (1 is a failure of sbomcmp itself, 2 a usage error), so a workflow can tell "something needs a decision" from "the tool broke". The gate only ever fires on VDB-only data: on an OSV-only run it never trips, because those signals are not there. The example workflow has the gate as a commented-out step.
 
 ## Development
 

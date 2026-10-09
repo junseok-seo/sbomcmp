@@ -30,7 +30,7 @@ func Markdown(res *model.Result, maxRows int) string {
 	for _, c := range res.Recommendation.Caveats {
 		w("- ⚠️ %s\n", c)
 	}
-	w("\n")
+	w("\n%s\n", ActNow(res))
 
 	w("| Tool | Version | Components | Coverage | Unique | Unique+Vuln | Crit/High | Ecosystems only here | Time |\n")
 	w("|---|---|---:|---:|---:|---:|---:|---|---:|\n")
@@ -171,6 +171,57 @@ func Markdown(res *model.Result, maxRows int) string {
 		w("\n")
 	}
 	return b.String()
+}
+
+// NeedVDBLine is shown in place of the action list when the scan ran
+// without VDB-only data.
+const NeedVDBLine = "Exploitation (KEV/EPSS), malicious-release, registry and MCP signals need VDB — set `VDB_API_KEY` or run with `--vuln-source vdb`."
+
+// NoActionsLine is shown when VDB answered and found nothing to act on.
+const NoActionsLine = "No VDB-only findings: nothing being exploited, no malicious releases, no unknown names, no unverified MCP servers."
+
+// ActNow renders the action list as a Markdown block: a table of what to
+// remove, upgrade, check or review, or one line saying why there is none.
+func ActNow(res *model.Result) string {
+	var b strings.Builder
+	w := func(f string, a ...any) { fmt.Fprintf(&b, f, a...) }
+	if !res.VDBSignalsActive() {
+		w("_%s_\n", NeedVDBLine)
+		return b.String()
+	}
+	if len(res.Actions) == 0 {
+		w("**Act now:** %s\n", NoActionsLine)
+		return b.String()
+	}
+	w("**Act now** (%d)\n\n| | Component | Why | Fix |\n|---|---|---|---|\n", res.ActionTotal)
+	for _, a := range res.Actions {
+		mark := "⚠️ warn"
+		if a.Level == "refuse" {
+			mark = "🛑 refuse"
+		}
+		key := "`" + a.Key + "`"
+		if a.Kind == "mcp" {
+			key = "MCP `" + a.Key + "`"
+		}
+		w("| %s | %s | %s | **%s** |\n", mark, cell(key), cell(a.Message), cell(a.Fix))
+	}
+	if res.ActionTotal > len(res.Actions) {
+		w("| … | | %d more | |\n", res.ActionTotal-len(res.Actions))
+	}
+	return b.String()
+}
+
+// ActionLines renders actions as plain text, one per line, for terminals.
+func ActionLines(actions []model.Action) []string {
+	out := make([]string, 0, len(actions))
+	for _, a := range actions {
+		key := a.Key
+		if a.Kind == "mcp" {
+			key = "MCP " + a.Key
+		}
+		out = append(out, fmt.Sprintf("[%s] %s — %s → %s", a.Level, key, a.Message, a.Fix))
+	}
+	return out
 }
 
 // cell escapes pipes so free text cannot break a Markdown table.
