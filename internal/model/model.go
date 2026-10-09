@@ -67,6 +67,10 @@ type Row struct {
 	// metadata.component). Not a registry dependency: never a slopsquat.
 	FirstParty       bool   `json:"firstParty,omitempty"`
 	FirstPartySource string `json:"firstPartySource,omitempty"`
+	// FirstPartyCandidate is set when only the name matches a declaration
+	// (the version differs). A registry confirming the name does not exist
+	// promotes it to FirstParty; a registry hit means it is a real dependency.
+	FirstPartyCandidate string `json:"firstPartyCandidate,omitempty"`
 }
 
 // Vuln is a vulnerability hit from an OSV-compatible source.

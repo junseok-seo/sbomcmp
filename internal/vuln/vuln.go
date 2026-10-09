@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/junseok-seo/sbomcmp/internal/firstparty"
 	"github.com/junseok-seo/sbomcmp/internal/model"
 	"github.com/junseok-seo/sbomcmp/internal/osv"
 	"github.com/junseok-seo/sbomcmp/internal/purl"
@@ -149,6 +150,11 @@ func fromVDB(ctx context.Context, c *vdb.Client, rows []model.Row, idx []int, me
 		if res[k] != nil {
 			answered++
 			vdb.Apply(&rows[i], res[k])
+			// A declared name the registry does not know is ours, not squatted.
+			missing := res[k].Registry != nil && res[k].Registry.RiskHint == "not_found"
+			if firstparty.Confirm(&rows[i], missing) {
+				meta.FirstParty++
+			}
 		}
 	}
 	if err != nil && answered == 0 {
