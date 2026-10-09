@@ -72,9 +72,10 @@ jobs:
 
       - name: Assert invariants
         env:
-          CANARY_DIR_RESULT: canary/dir.json
-          CANARY_IMAGE_RESULT: canary/image.json
-          CANARY_REPORT: canary/report.md
+          # absolute: go test runs with the package directory as cwd
+          CANARY_DIR_RESULT: ${{ github.workspace }}/canary/dir.json
+          CANARY_IMAGE_RESULT: ${{ github.workspace }}/canary/image.json
+          CANARY_REPORT: ${{ github.workspace }}/canary/report.md
         run: go test -tags canary -count=1 -v ./internal/canary
 
       - name: Job summary
