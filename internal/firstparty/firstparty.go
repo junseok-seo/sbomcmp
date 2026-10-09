@@ -45,6 +45,8 @@ func Collect(root string) []Decl {
 		switch d.Name() {
 		case "package.json":
 			out = append(out, packageJSON(path, rel)...)
+		case "package-lock.json":
+			out = append(out, packageLock(path, rel)...)
 		case "Cargo.toml":
 			out = append(out, cargoToml(path, rel)...)
 		case "pyproject.toml":
@@ -68,7 +70,9 @@ func FromRoot(tool string, c *model.Component) *Decl {
 // Mark flags rows that are first-party. A row matches a declaration when the
 // name key is equal and either the declaration has no version or the
 // versions agree — so a registry dependency that merely shares a name with
-// an internal package at another version is still checked.
+// an internal package at another version is still checked. A name-only
+// match is recorded as a candidate; the registry check settles it (see
+// Confirm).
 func Mark(rows []model.Row, decls []Decl) int {
 	if len(decls) == 0 {
 		return 0
@@ -83,12 +87,38 @@ func Mark(rows []model.Row, decls []Decl) int {
 			if d.Version == "" || strings.TrimPrefix(d.Version, "v") == strings.TrimPrefix(rows[i].Version, "v") {
 				rows[i].FirstParty = true
 				rows[i].FirstPartySource = d.Source
+				rows[i].FirstPartyCandidate = ""
 				n++
 				break
+			}
+			if rows[i].FirstPartyCandidate == "" {
+				rows[i].FirstPartyCandidate = d.Source
 			}
 		}
 	}
 	return n
+}
+
+// Confirm settles a name-only candidate once a registry has answered: a
+// name the registry does not know, declared by this project, is the
+// project's own package at a version the manifest no longer states (a stale
+// lockfile root, for instance). Any slopsquat signal on it is dropped.
+// Returns true when the row was promoted.
+func Confirm(row *model.Row, registryMissing bool) bool {
+	if row.FirstPartyCandidate == "" || row.FirstParty || !registryMissing {
+		return false
+	}
+	row.FirstParty = true
+	row.FirstPartySource = row.FirstPartyCandidate + " (version differs from manifest)"
+	row.FirstPartyCandidate = ""
+	kept := row.Signals[:0]
+	for _, s := range row.Signals {
+		if s.Kind != "slopsquat" {
+			kept = append(kept, s)
+		}
+	}
+	row.Signals = kept
+	return true
 }
 
 func key(typ, name, version string) (string, string) {
@@ -111,6 +141,40 @@ func packageJSON(path, rel string) []Decl {
 	}
 	nk, v := key("npm", doc.Name, doc.Version)
 	return []Decl{{NameKey: nk, Version: v, Source: rel, Private: doc.Private}}
+}
+
+// packageLock reads the root entry of an npm lockfile: it names the project
+// itself, and its version can lag behind package.json.
+func packageLock(path, rel string) []Decl {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Name     string `json:"name"`
+		Version  string `json:"version"`
+		Packages map[string]struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"packages"`
+	}
+	if json.Unmarshal(data, &doc) != nil {
+		return nil
+	}
+	name, version := doc.Name, doc.Version
+	if root, ok := doc.Packages[""]; ok {
+		if root.Name != "" {
+			name = root.Name
+		}
+		if root.Version != "" {
+			version = root.Version
+		}
+	}
+	if name == "" {
+		return nil
+	}
+	nk, v := key("npm", name, version)
+	return []Decl{{NameKey: nk, Version: v, Source: rel}}
 }
 
 var (
