@@ -56,6 +56,8 @@ func main() {
 		err = cmdUI(os.Args[2:])
 	case "report":
 		err = cmdReport(os.Args[2:])
+	case "push":
+		err = cmdPush(os.Args[2:])
 	case "generators":
 		for _, a := range gen.Default() {
 			fmt.Printf("%-12s %s\n", a.Name, a.Notes)
@@ -81,6 +83,7 @@ Usage:
   sbomcmp scan [flags] <dir | image:NAME>
   sbomcmp ui   [flags]
   sbomcmp report [flags]
+  sbomcmp push [flags]            upload the recommended tool's SBOM to VDB (--watch: keep re-checking)
   sbomcmp generators
 
 Run "sbomcmp <command> -h" for flags.
@@ -110,10 +113,14 @@ func cmdScan(args []string) error {
 	vulnTimeout := fs.Duration("vuln-timeout", 60*time.Second, "HTTP timeout for vulnerability APIs")
 	noMCP := fs.Bool("no-mcp", false, "skip MCP server discovery")
 	openUI := fs.Bool("ui", false, "open the viewer after scanning")
+	push, pushWatch := pushScanFlags(fs)
 	quiet := fs.Bool("q", false, "quiet")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
 		return fmt.Errorf("scan needs exactly one target")
+	}
+	if *push || *pushWatch {
+		requireKey(*vulnKey)
 	}
 	switch *vulnSource {
 	case "auto", "osv", "vdb", "none":
@@ -237,6 +244,9 @@ func cmdScan(args []string) error {
 	log(summaryLine(res))
 	log(fmt.Sprintf("wrote %s (raw SBOMs in %s/)", *out, *rawDir))
 
+	if err := pushAfterScan(res, *push, *pushWatch, *vdbAPI, *vulnKey); err != nil {
+		return err
+	}
 	if *openUI {
 		return ui.Serve(res, *out, 0, true)
 	}

@@ -77,6 +77,7 @@ sbomcmp scan --ui ./repo                  # open the viewer when done
 sbomcmp ui                                # viewer for ./sbomcmp.json
 sbomcmp report --format md                # Markdown (PR comments, CI logs)
 sbomcmp report --format json              # the full result
+sbomcmp push --watch                      # hand the winning SBOM to VDB for monitoring
 ```
 
 Output: `sbomcmp.json` (the comparison) and `sbomcmp.raw/<tool>.cdx.json` (each tool's untouched SBOM, so nothing is lost).
@@ -118,6 +119,23 @@ With VDB active:
 Coverage is always visible: the status strip under the verdict (and the `Vulnerability data:` line in the report) says which source answered, keyed or anonymous, how many of the queried rows got an answer, and what VDB added (KEV rows, rows with EPSS ≥ 10%, slopsquat signals, MCP registry hits). When the anonymous quota runs out mid-scan the strip turns amber and shows the fix; the same shortfall appears as a recommendation caveat. OSV runs that hit the per-advisory detail cap report how many advisories were left at UNKNOWN.
 
 Without a key, sbomcmp behaves exactly as before against public OSV. `VDB_API_URL` or `--vdb-api` points at a self-hosted deployment.
+
+### Push to VDB
+
+A comparison answers "which SBOM should I keep?". `sbomcmp push` is the next step: it hands that SBOM to VDB so the answer stays current.
+
+```sh
+export VDB_API_KEY=vdb_…
+sbomcmp push                              # the recommended tool's SBOM from ./sbomcmp.json
+sbomcmp push --tool syft --watch          # a different tool; also register it as a watch
+sbomcmp scan --push-watch ./repo          # scan, compare and push in one command
+```
+
+What it sends: the recommended primary tool's untouched CycloneDX from `sbomcmp.raw/<tool>.cdx.json` (override with `--tool`), uploaded as `<target>-<tool>.cdx.json` to VDB's `POST /v1/sbom/scan`. Nothing else leaves the machine: not the comparison, not the other tools' SBOMs. The output is VDB's verdict for the whole SBOM (`REFUSE` / `CONFIRM` / `PROCEED`), the counts by severity, the top findings with their fixed versions, and a link to the full result at https://vdb.ai.kr/sbom-scan.
+
+`--watch` (or `scan --push-watch`) additionally registers the same file with `POST /v1/sbom/watches`: VDB re-checks it as new advisories, KEV entries and malicious releases land, and emails you. The command prints the watch id and name; when the account's watch quota is used up it prints the limit and exits 1. Free accounts have a small quota.
+
+A key is required for push (`VDB_API_KEY` or `--vuln-key`; exit 2 without one). `VDB_API_URL` / `--vdb-api` point it at another deployment, like the rest of the VDB adapter.
 
 ### MCP blind spot
 
@@ -165,7 +183,8 @@ Add one `Adapter` in [`internal/gen/gen.go`](internal/gen/gen.go): binary names,
 
 - Drift: compare against the previous scan and comment only on what changed
 - Quality score (NTIA / CRA minimum fields) by calling `sbomqs` when present
-- Push the chosen tool's SBOM to a watch service (`sbomcmp push`)
+
+Done: push the chosen tool's SBOM to a watch service — [`sbomcmp push`](#push-to-vdb).
 
 ## License
 
