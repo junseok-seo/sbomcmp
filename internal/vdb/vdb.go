@@ -28,8 +28,10 @@ import (
 // DefaultEndpoint is the public VDB origin.
 const DefaultEndpoint = "https://vdb.ai.kr"
 
-// AnonymousBatch is the per-request cap VDB enforces without a key.
-const AnonymousBatch = 5
+// AnonymousBatch is the per-request cap VDB enforces without a key (the
+// hourly quota is 100 packages). The server reports its real limit in the
+// anonymous block as max_per_request, which overrides this at run time.
+const AnonymousBatch = 25
 
 // Client calls one VDB deployment.
 type Client struct {
@@ -131,41 +133,54 @@ type VulnHit struct {
 }
 
 // Quota is the anonymous-usage block VDB appends when no key was sent.
+// Unit says what the numbers count: "packages" (current) or requests (older
+// deployments).
 type Quota struct {
-	Authenticated bool `json:"authenticated"`
-	LimitPerHour  int  `json:"limit_per_hour"`
-	Remaining     int  `json:"remaining"`
-	ResetsIn      int  `json:"resets_in_seconds"`
+	Authenticated bool   `json:"authenticated"`
+	Unit          string `json:"unit"`
+	LimitPerHour  int    `json:"limit_per_hour"`
+	Remaining     int    `json:"remaining"`
+	ResetsIn      int    `json:"resets_in_seconds"`
+	MaxPerRequest int    `json:"max_per_request"`
 }
 
 type response struct {
-	Results   []Result `json:"results"`
-	Anonymous *Quota   `json:"anonymous"`
-	Truncated *struct {
+	Results       []Result `json:"results"`
+	Anonymous     *Quota   `json:"anonymous"`
+	ProbeTimedOut []string `json:"probe_timed_out"` // purls whose registry probe hit the time budget
+	Truncated     *struct {
 		Checked    int `json:"checked"`
 		NotChecked int `json:"not_checked"`
 	} `json:"truncated"`
 }
 
-// KeyedBatch is the purls-per-request default with an API key. VDB probes
-// every package against its live registry (8 workers, 5 s each) and runs
-// per-package slop lookups, so 100-package requests routinely exceed a
-// minute; 20 keeps one request well under the client timeout.
-const KeyedBatch = 20
+// Meta is what Check learned about the call besides the results.
+type Meta struct {
+	Quota         *Quota   // last anonymous block seen, nil when keyed
+	ProbeTimedOut []string // purls VDB could not probe in time; "unknown", not "missing"
+	Batch         int      // batch size in effect at the end
+}
+
+// KeyedBatch is the purls-per-request default with an API key. VDB caps a
+// request at 100 and bounds registry probing with a 20 s budget; 50 keeps a
+// request comfortably inside the client timeout. A 413 carrying
+// max_per_request lowers it at run time.
+const KeyedBatch = 50
 
 // Concurrency is the number of keyed requests in flight at once.
 const Concurrency = 4
 
 // Check runs check-packages over purls in batches. The returned slice is
 // aligned with the input; entries VDB did not answer (quota exhausted,
-// truncated, failed after retry) are nil. Anonymous calls run one batch at
-// a time so the quota can stop them; keyed calls run Concurrency batches in
-// parallel. A batch that times out or gets a 5xx is retried once as two
-// halves. The returned error describes the first failure, but partial
-// results are still filled in. The quota of the last response is returned
-// when the call was anonymous.
-func (c *Client) Check(ctx context.Context, purls []string) ([]*Result, *Quota, error) {
+// failed after retry) are nil. Anonymous calls run one batch at a time so
+// the quota can stop them, follow the server's max_per_request, and resend
+// what a truncated answer left out; keyed calls run Concurrency batches in
+// parallel and lower the batch size when a 413 names a smaller limit. A
+// batch that times out or gets a 5xx is retried once as two halves. The
+// returned error describes the first failure; partial results are kept.
+func (c *Client) Check(ctx context.Context, purls []string) ([]*Result, *Meta, error) {
 	out := make([]*Result, len(purls))
+	meta := &Meta{}
 	batch := c.Batch
 	if batch <= 0 {
 		if c.APIKey == "" {
@@ -174,30 +189,47 @@ func (c *Client) Check(ctx context.Context, purls []string) ([]*Result, *Quota, 
 			batch = KeyedBatch
 		}
 	}
+
+	if c.APIKey == "" {
+		var quota *Quota
+		for start := 0; start < len(purls); {
+			if quota != nil && quota.Remaining == 0 {
+				break
+			}
+			n := batch
+			if quota != nil && quota.Remaining > 0 && quota.Unit == "packages" && quota.Remaining < n {
+				n = quota.Remaining
+			}
+			end := min(start+n, len(purls))
+			r, err := c.post(ctx, purls[start:end])
+			if err != nil {
+				meta.Quota, meta.Batch = quota, batch
+				return out, meta, err
+			}
+			if r.Anonymous != nil {
+				quota = r.Anonymous
+				if quota.MaxPerRequest > 0 && quota.MaxPerRequest < batch {
+					batch = quota.MaxPerRequest
+				}
+			}
+			fill(out, start, r.Results)
+			meta.ProbeTimedOut = append(meta.ProbeTimedOut, r.ProbeTimedOut...)
+			if r.Truncated != nil && r.Truncated.Checked > 0 && r.Truncated.Checked < end-start {
+				// The server answered a prefix; continue from where it stopped.
+				start += r.Truncated.Checked
+				continue
+			}
+			start = end
+		}
+		meta.Quota, meta.Batch = quota, batch
+		return out, meta, nil
+	}
+
 	type chunk struct{ start, end int }
 	var chunks []chunk
 	for start := 0; start < len(purls); start += batch {
 		chunks = append(chunks, chunk{start, min(start+batch, len(purls))})
 	}
-
-	if c.APIKey == "" {
-		var quota *Quota
-		for _, ch := range chunks {
-			if quota != nil && quota.Remaining == 0 {
-				break
-			}
-			r, err := c.post(ctx, purls[ch.start:ch.end])
-			if err != nil {
-				return out, quota, err
-			}
-			if r.Anonymous != nil {
-				quota = r.Anonymous
-			}
-			fill(out, ch.start, r.Results)
-		}
-		return out, quota, nil
-	}
-
 	var mu sync.Mutex
 	var firstErr error
 	sem := make(chan struct{}, Concurrency)
@@ -208,7 +240,7 @@ func (c *Client) Check(ctx context.Context, purls []string) ([]*Result, *Quota, 
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			err := c.checkRetry(ctx, purls, ch.start, ch.end, out, &mu, true)
+			err := c.checkRetry(ctx, purls, ch.start, ch.end, out, meta, &mu, true)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -219,25 +251,40 @@ func (c *Client) Check(ctx context.Context, purls []string) ([]*Result, *Quota, 
 		}(ch)
 	}
 	wg.Wait()
-	return out, nil, firstErr
+	meta.Batch = batch
+	return out, meta, firstErr
 }
 
-// checkRetry posts one slice; on a timeout or 5xx it splits the slice in two
-// and tries each half once more.
-func (c *Client) checkRetry(ctx context.Context, purls []string, start, end int, out []*Result, mu *sync.Mutex, allowSplit bool) error {
+// checkRetry posts one slice. On a timeout or 5xx it splits the slice in two
+// and tries each half once more; on a 413 that names max_per_request it
+// re-sends in slices of that size.
+func (c *Client) checkRetry(ctx context.Context, purls []string, start, end int, out []*Result, meta *Meta, mu *sync.Mutex, allowSplit bool) error {
 	r, err := c.post(ctx, purls[start:end])
 	if err == nil {
 		mu.Lock()
 		fill(out, start, r.Results)
+		meta.ProbeTimedOut = append(meta.ProbeTimedOut, r.ProbeTimedOut...)
 		mu.Unlock()
 		return nil
 	}
-	if !allowSplit || end-start < 2 || !retryable(err) || ctx.Err() != nil {
+	if !allowSplit || ctx.Err() != nil {
+		return err
+	}
+	var he *httpError
+	if errors.As(err, &he) && he.status == 413 && he.maxPerRequest > 0 && he.maxPerRequest < end-start {
+		for s := start; s < end; s += he.maxPerRequest {
+			if e := c.checkRetry(ctx, purls, s, min(s+he.maxPerRequest, end), out, meta, mu, false); e != nil {
+				return e
+			}
+		}
+		return nil
+	}
+	if end-start < 2 || !retryable(err) {
 		return err
 	}
 	mid := start + (end-start)/2
-	e1 := c.checkRetry(ctx, purls, start, mid, out, mu, false)
-	e2 := c.checkRetry(ctx, purls, mid, end, out, mu, false)
+	e1 := c.checkRetry(ctx, purls, start, mid, out, meta, mu, false)
+	e2 := c.checkRetry(ctx, purls, mid, end, out, meta, mu, false)
 	if e1 != nil {
 		return e1
 	}
@@ -254,8 +301,9 @@ func fill(out []*Result, start int, results []Result) {
 }
 
 type httpError struct {
-	status int
-	msg    string
+	status        int
+	msg           string
+	maxPerRequest int // from a 413 body, when the server names its limit
 }
 
 func (e *httpError) Error() string { return e.msg }
@@ -292,11 +340,21 @@ func (c *Client) post(ctx context.Context, purls []string) (*response, error) {
 	resp.Body.Close()
 	switch {
 	case resp.StatusCode == 401:
-		return nil, &httpError{401, "check-packages: HTTP 401 — VDB_API_KEY was rejected"}
+		return nil, &httpError{status: 401, msg: "check-packages: HTTP 401 — VDB_API_KEY was rejected"}
 	case resp.StatusCode == 429:
-		return nil, &httpError{429, fmt.Sprintf("check-packages: HTTP 429 — anonymous quota exhausted; set VDB_API_KEY (free at %s/signup)", c.Endpoint)}
+		return nil, &httpError{status: 429, msg: fmt.Sprintf("check-packages: HTTP 429 — anonymous quota exhausted; set VDB_API_KEY (free at %s/signup)", c.Endpoint)}
+	case resp.StatusCode == 413:
+		var body struct {
+			Detail struct {
+				MaxPerRequest int `json:"max_per_request"`
+			} `json:"detail"`
+			MaxPerRequest int `json:"max_per_request"`
+		}
+		_ = json.Unmarshal(data, &body)
+		limit := max(body.Detail.MaxPerRequest, body.MaxPerRequest)
+		return nil, &httpError{413, fmt.Sprintf("check-packages (%d packages): HTTP 413 — VDB accepts at most %d per request", len(purls), limit), limit}
 	case resp.StatusCode/100 != 2:
-		return nil, &httpError{resp.StatusCode, fmt.Sprintf("check-packages (%d packages): HTTP %d: %s", len(purls), resp.StatusCode, truncate(strings.TrimSpace(string(data)), 200))}
+		return nil, &httpError{status: resp.StatusCode, msg: fmt.Sprintf("check-packages (%d packages): HTTP %d: %s", len(purls), resp.StatusCode, truncate(strings.TrimSpace(string(data)), 200))}
 	}
 	var r response
 	if err := json.Unmarshal(data, &r); err != nil {
