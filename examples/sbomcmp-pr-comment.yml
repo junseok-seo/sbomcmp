@@ -40,6 +40,13 @@ jobs:
       - name: Report
         run: sbomcmp report -i sbomcmp.json > report.md
 
+      # Gate on the "Act now" list (needs VDB_API_KEY above; with OSV only it never trips).
+      # Exit 3 = a malicious release, a KEV advisory, an unresolvable name or a risky MCP
+      # server needs a decision; the actions are printed to the job log. Use --fail-on warn
+      # to also stop on EPSS ≥ 10% and warn-level signals.
+      # - name: Gate on VDB-only findings
+      #   run: sbomcmp report -i sbomcmp.json --fail-on refuse > /dev/null
+
       - uses: actions/upload-artifact@v4
         with:
           name: sbomcmp

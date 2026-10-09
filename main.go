@@ -6,11 +6,13 @@
 //	sbomcmp scan image:nginx:1.27       # container image
 //	sbomcmp ui                          # open the viewer on localhost
 //	sbomcmp report --format md          # Markdown for PR comments
+//	sbomcmp report --fail-on warn       # CI gate: exit 3 on VDB-only findings
 package main
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -25,6 +27,7 @@ import (
 	"github.com/junseok-seo/sbomcmp/internal/gen"
 	"github.com/junseok-seo/sbomcmp/internal/mcp"
 	"github.com/junseok-seo/sbomcmp/internal/model"
+	"github.com/junseok-seo/sbomcmp/internal/osv"
 	"github.com/junseok-seo/sbomcmp/internal/report"
 	"github.com/junseok-seo/sbomcmp/internal/ui"
 	"github.com/junseok-seo/sbomcmp/internal/vuln"
@@ -71,9 +74,47 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
+		var ec exitError
+		if errors.As(err, &ec) {
+			os.Exit(int(ec))
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
+}
+
+// exitError carries a non-error exit status (the --fail-on gate).
+type exitError int
+
+func (e exitError) Error() string { return fmt.Sprintf("exit %d", int(e)) }
+
+// ExitFailOn is the status when --fail-on finds an action at or above the
+// requested level: distinct from 1 (sbomcmp itself failed) and 2 (usage).
+const ExitFailOn = 3
+
+func checkFailOn(level string) error {
+	switch level {
+	case "none", "warn", "refuse":
+		return nil
+	}
+	return fmt.Errorf("--fail-on must be none, warn or refuse")
+}
+
+// failOn prints the actions at or above level to stderr and returns the
+// gate's exit status when there are any.
+func failOn(res *model.Result, level string) error {
+	acts := res.ActionsAtLeast(level)
+	if len(acts) == 0 {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "sbomcmp: %d action(s) at level %s or above (--fail-on %s):\n", len(acts), level, level)
+	for _, l := range report.ActionLines(acts) {
+		fmt.Fprintln(os.Stderr, "  "+l)
+	}
+	if res.ActionTotal > len(res.Actions) {
+		fmt.Fprintf(os.Stderr, "  … %d more in the result file\n", res.ActionTotal-len(res.Actions))
+	}
+	return exitError(ExitFailOn)
 }
 
 func usage() {
@@ -111,9 +152,11 @@ func cmdScan(args []string) error {
 	vulnFixture := fs.String("vuln-fixture", "", "offline fixture JSON instead of any API")
 	vulnAll := fs.Bool("vuln-all", false, "query every component, not only disagreements")
 	vulnTimeout := fs.Duration("vuln-timeout", 60*time.Second, "HTTP timeout for vulnerability APIs")
+	vulnDetails := fs.Int("vuln-details", osv.DefaultMaxDetails, "max distinct advisories to fetch OSV details for (0 = unlimited)")
 	noMCP := fs.Bool("no-mcp", false, "skip MCP server discovery")
 	openUI := fs.Bool("ui", false, "open the viewer after scanning")
 	push, pushWatch := pushScanFlags(fs)
+	failLevel := fs.String("fail-on", "none", "exit 3 when an action at this level or above exists: none | warn | refuse")
 	quiet := fs.Bool("q", false, "quiet")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
@@ -121,6 +164,9 @@ func cmdScan(args []string) error {
 	}
 	if *push || *pushWatch {
 		requireKey(*vulnKey)
+	}
+	if err := checkFailOn(*failLevel); err != nil {
+		return err
 	}
 	switch *vulnSource {
 	case "auto", "osv", "vdb", "none":
@@ -208,7 +254,7 @@ func cmdScan(args []string) error {
 
 	vcfg := vuln.Config{
 		Source: *vulnSource, OSVEndpoint: *osvAPI, VDBEndpoint: *vdbAPI, VDBKey: *vulnKey,
-		Fixture: *vulnFixture, Timeout: *vulnTimeout, OnlyDisagreements: !*vulnAll, Log: log,
+		Fixture: *vulnFixture, Timeout: *vulnTimeout, OnlyDisagreements: !*vulnAll, OSVDetails: *vulnDetails, Log: log,
 	}
 	if vcfg.Resolve() == "none" {
 		res.Vuln.Source = "none"
@@ -248,9 +294,11 @@ func cmdScan(args []string) error {
 		return err
 	}
 	if *openUI {
-		return ui.Serve(res, *out, 0, true)
+		if err := ui.Serve(res, *out, 0, true); err != nil {
+			return err
+		}
 	}
-	return nil
+	return failOn(res, *failLevel)
 }
 
 func envOr(key, def string) string {
@@ -286,6 +334,20 @@ func summaryLine(res *model.Result) string {
 	for _, c := range res.Recommendation.Caveats {
 		fmt.Fprintf(&b, "\n  ⚠ %s", c)
 	}
+	switch {
+	case !res.VDBSignalsActive():
+		fmt.Fprintf(&b, "\nAct now: %s", strings.ReplaceAll(report.NeedVDBLine, "`", ""))
+	case len(res.Actions) == 0:
+		fmt.Fprintf(&b, "\nAct now: %s", report.NoActionsLine)
+	default:
+		fmt.Fprintf(&b, "\nAct now (%d):", res.ActionTotal)
+		for _, l := range report.ActionLines(res.Actions) {
+			fmt.Fprintf(&b, "\n  %s", l)
+		}
+		if res.ActionTotal > len(res.Actions) {
+			fmt.Fprintf(&b, "\n  … %d more", res.ActionTotal-len(res.Actions))
+		}
+	}
 	return b.String()
 }
 
@@ -319,7 +381,11 @@ func cmdReport(args []string) error {
 	in := fs.String("i", "sbomcmp.json", "result file")
 	format := fs.String("format", "md", "md | json")
 	maxRows := fs.Int("max-rows", 40, "max disagreement rows in md")
+	failLevel := fs.String("fail-on", "none", "exit 3 when an action at this level or above exists: none | warn | refuse")
 	fs.Parse(args)
+	if err := checkFailOn(*failLevel); err != nil {
+		return err
+	}
 	res, err := loadResult(*in)
 	if err != nil {
 		return err
@@ -330,9 +396,11 @@ func cmdReport(args []string) error {
 	case "json":
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(res)
+		if err := enc.Encode(res); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unknown format %q", *format)
 	}
-	return nil
+	return failOn(res, *failLevel)
 }

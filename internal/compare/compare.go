@@ -201,6 +201,10 @@ func Finalize(res *model.Result) {
 		}
 	}
 	sort.Strings(tools)
+	// Signal-derived reasons and the action list depend on enrichment, which
+	// has already run by the time Finalize is called.
+	explainSignals(res.Rows)
+	res.Actions, res.ActionTotal = actions(res.Rows, res.MCP)
 	res.Union = len(res.Rows)
 	res.Intersection = 0
 	for _, r := range res.Rows {
