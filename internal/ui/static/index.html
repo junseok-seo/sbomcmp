@@ -104,8 +104,10 @@ nav.tabs button .count{color:var(--muted);margin-left:6px;font-variant-numeric:t
 .matrix tr.row:hover td{background:var(--accent-soft)}
 .matrix tr.row[aria-expanded="true"] td{background:var(--accent-soft)}
 .dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--dot);vertical-align:-1px}
-.dot.off{background:none;border:1.5px solid var(--dot-empty)}
-.dot.ver{background:none;border:3px solid var(--dot);width:12px;height:12px}
+.dot.off{background:none;border:1.5px dashed var(--dot-empty);opacity:.7}
+.ver{display:inline-block;font-family:var(--mono);font-size:11px;line-height:1.4;padding:0 5px;border-radius:3px;border:1.5px solid var(--sev-med);color:var(--sev-med);background:var(--panel);white-space:nowrap;max-width:9ch;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.legend-row{display:flex;gap:18px;flex-wrap:wrap;align-items:center;color:var(--muted);font-size:13px;margin:0 0 10px}
+.legend-row span{display:inline-flex;align-items:center;gap:6px}
 .pill{display:inline-block;padding:1px 7px;border-radius:3px;font-size:12px;font-weight:600;line-height:1.5}
 .pill.sev-CRITICAL{background:var(--sev-crit);color:#fff}
 .pill.sev-HIGH{background:var(--sev-high);color:#fff}
@@ -186,6 +188,12 @@ footer{margin-top:40px;color:var(--muted);font-size:13px}
       <input type="search" id="search" placeholder="Search name or version">
       <div class="spacer"></div>
       <div class="meta" id="matrix-meta"></div>
+    </div>
+    <div class="legend-row" id="legend">
+      <span><i class="dot"></i> found</span>
+      <span><i class="dot off"></i> not found</span>
+      <span><i class="ver">1.2.3</i> found, but at this other version</span>
+      <span>Click a row for each tool's purl and the reasons.</span>
     </div>
     <div id="matrix-wrap"></div>
   </section>
@@ -329,10 +337,13 @@ function renderMatrix(){
     h+=`<td class="key"><span class="type">${esc(r.type)}/</span>${esc((r.namespace?r.namespace+"/":"")+r.name)}<span class="type">@</span>${esc(r.version)}</td>`;
     for(const t of tools){
       const c=r.cells[t]||{};
-      if(c.found)h+=`<td class="tool"><span class="dot" title="${esc(t)}: ${esc(c.purl||c.version)}"></span></td>`;
+      if(c.found)h+=`<td class="tool"><span class="dot" title="${esc(t)} found ${esc(c.purl||c.version)}"></span></td>`;
       else{
         const vm=(r.reasons||[]).find(x=>x.startsWith("version-mismatch: "+t));
-        h+=`<td class="tool"><span class="dot ${vm?"ver":"off"}" title="${esc(vm||t+": not found")}"></span></td>`;
+        if(vm){
+          const other=vm.replace(/^.* as /,"");
+          h+=`<td class="tool"><span class="ver" title="${esc(vm)}">${esc(other)}</span></td>`;
+        }else h+=`<td class="tool"><span class="dot off" title="${esc(t)}: not found"></span></td>`;
       }
     }
     h+=`<td class="vul">`;
