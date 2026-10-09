@@ -97,7 +97,7 @@ func Enrich(ctx context.Context, cfg Config, rows []model.Row, meta *model.VulnM
 		meta.Endpoint = c.Endpoint
 		meta.Anonymous = cfg.VDBKey == ""
 		if meta.Anonymous {
-			cfg.Log(fmt.Sprintf("[vuln] VDB without a key: %d packages per request on an hourly quota — set VDB_API_KEY for full coverage", vdb.AnonymousBatch))
+			cfg.Log("[vuln] VDB without a key: 100 packages per hour — set VDB_API_KEY for full coverage")
 		}
 		err = fromVDB(ctx, c, rows, idx, meta)
 	default:
@@ -131,7 +131,7 @@ func fromVDB(ctx context.Context, c *vdb.Client, rows []model.Row, idx []int, me
 	for k, i := range idx {
 		purls[k] = QueryPurl(rows[i])
 	}
-	res, quota, err := c.Check(ctx, purls)
+	res, vm, err := c.Check(ctx, purls)
 	answered := 0
 	for k, i := range idx {
 		if res[k] != nil {
@@ -144,15 +144,25 @@ func fromVDB(ctx context.Context, c *vdb.Client, rows []model.Row, idx []int, me
 	}
 	meta.Answered = answered
 	meta.VDBExtras = true
+	var notes []string
 	if answered < len(idx) {
-		meta.Note = fmt.Sprintf("VDB answered %d of %d queries", answered, len(idx))
-		if quota != nil && !quota.Authenticated {
-			meta.Note += fmt.Sprintf(" (anonymous quota: %d/hour, %d left)", quota.LimitPerHour, quota.Remaining)
+		n := fmt.Sprintf("VDB answered %d of %d queries", answered, len(idx))
+		if q := vm.Quota; q != nil && !q.Authenticated {
+			unit := "requests"
+			if q.Unit == "packages" {
+				unit = "packages"
+			}
+			n += fmt.Sprintf(" (anonymous quota: %d %s/hour, %d left)", q.LimitPerHour, unit, q.Remaining)
 		}
 		if err != nil {
-			meta.Note += "; " + err.Error()
+			n += "; " + err.Error()
 		}
+		notes = append(notes, n)
 	}
+	if len(vm.ProbeTimedOut) > 0 {
+		notes = append(notes, fmt.Sprintf("%d registry probe(s) timed out on VDB's side; those names count as unknown, not missing", len(vm.ProbeTimedOut)))
+	}
+	meta.Note = strings.Join(notes, "; ")
 	return nil
 }
 

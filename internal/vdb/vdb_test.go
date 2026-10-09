@@ -77,15 +77,15 @@ func TestCheckParsesLiveShapeAndBatches(t *testing.T) {
 	c := New(srv.URL, "", 0)
 	c.Batch = 3
 	purls := []string{"pkg:npm/qs@6.11.0", "pkg:npm/requests-toolkit-pro@1.2.0", "pkg:npm/@modelcontextprotocol/server-filesystem", "pkg:npm/chalk@2.4.2", "pkg:npm/trunc@1", "pkg:npm/x@1"}
-	res, quota, err := c.Check(context.Background(), purls)
+	res, vm, err := c.Check(context.Background(), purls)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 || sizes[0] != 3 || sizes[1] != 3 {
 		t.Fatalf("batching: calls=%d sizes=%v", calls, sizes)
 	}
-	if quota == nil || quota.Remaining != 19 {
-		t.Fatalf("quota not parsed: %+v", quota)
+	if vm.Quota == nil || vm.Quota.Remaining != 19 {
+		t.Fatalf("quota not parsed: %+v", vm.Quota)
 	}
 	row := model.Row{Key: "npm/qs@6.11.0"}
 	Apply(&row, res[0])
@@ -139,9 +139,9 @@ func TestCheckKeyedRunsAllBatchesWithBearer(t *testing.T) {
 	c := New(srv.URL, "vdb_test", 0)
 	c.Batch = 2
 	purls := []string{"a", "b", "c", "d", "e"}
-	res, quota, err := c.Check(context.Background(), purls)
-	if err != nil || quota != nil {
-		t.Fatalf("err=%v quota=%v", err, quota)
+	res, vm, err := c.Check(context.Background(), purls)
+	if err != nil || vm.Quota != nil {
+		t.Fatalf("err=%v quota=%v", err, vm.Quota)
 	}
 	if calls != 3 {
 		t.Fatalf("expected 3 batches, got %d", calls)
@@ -198,11 +198,97 @@ func TestCheckAnonymousStopsOnQuota(t *testing.T) {
 	defer srv.Close()
 	c := New(srv.URL, "", 0)
 	c.Batch = 1
-	res, quota, err := c.Check(context.Background(), []string{"a", "b", "c"})
+	res, vm, err := c.Check(context.Background(), []string{"a", "b", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res[0] == nil || res[1] != nil || res[2] != nil || quota == nil || quota.Remaining != 0 {
-		t.Fatalf("expected to stop after quota hit 0: %v %v", res, quota)
+	if res[0] == nil || res[1] != nil || res[2] != nil || vm.Quota == nil || vm.Quota.Remaining != 0 {
+		t.Fatalf("expected to stop after quota hit 0: %v %v", res, vm.Quota)
+	}
+}
+
+// answer echoes each requested package as a low-risk result.
+func answer(pkgs []string) []map[string]any {
+	res := make([]map[string]any, 0, len(pkgs))
+	for _, p := range pkgs {
+		res = append(res, map[string]any{"input": p, "purl": p, "risk": "low"})
+	}
+	return res
+}
+
+func TestCheckAnonymousFollowsServerLimitAndTruncation(t *testing.T) {
+	// Server allows 2 per request and truncates bigger ones like VDB does:
+	// answers a prefix, says how many it checked, and names its limit.
+	var sizes []int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Packages []string `json:"packages"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		sizes = append(sizes, len(req.Packages))
+		out := map[string]any{"agent_action": "PROCEED",
+			"anonymous": map[string]any{"authenticated": false, "unit": "packages", "limit_per_hour": 100, "remaining": 90, "max_per_request": 2}}
+		if len(req.Packages) > 2 {
+			out["results"] = answer(req.Packages[:2])
+			out["truncated"] = map[string]any{"checked": 2, "not_checked": len(req.Packages) - 2}
+			out["probe_timed_out"] = []string{req.Packages[0]}
+		} else {
+			out["results"] = answer(req.Packages)
+		}
+		json.NewEncoder(w).Encode(out)
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "", 0)
+	c.Batch = 5
+	purls := []string{"a", "b", "c", "d", "e"}
+	res, vm, err := c.Check(context.Background(), purls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, p := range purls {
+		if res[i] == nil || res[i].Input != p {
+			t.Fatalf("result %d missing or misaligned: %+v", i, res[i])
+		}
+	}
+	if len(sizes) != 3 || sizes[0] != 5 || sizes[1] != 2 || sizes[2] != 1 {
+		t.Fatalf("expected 5 (truncated to 2), then 2, then 1: %v", sizes)
+	}
+	if vm.Batch != 2 || len(vm.ProbeTimedOut) != 1 || vm.ProbeTimedOut[0] != "a" {
+		t.Fatalf("meta: %+v", vm)
+	}
+}
+
+func TestCheckKeyedResplitsOn413(t *testing.T) {
+	var mu sync.Mutex
+	var sizes []int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Packages []string `json:"packages"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		sizes = append(sizes, len(req.Packages))
+		mu.Unlock()
+		if len(req.Packages) > 2 {
+			w.WriteHeader(413)
+			json.NewEncoder(w).Encode(map[string]any{"detail": map[string]any{"error": "too_many_packages", "max_per_request": 2}})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"results": answer(req.Packages), "agent_action": "PROCEED"})
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "vdb_test", 0)
+	c.Batch = 5
+	res, _, err := c.Check(context.Background(), []string{"a", "b", "c", "d", "e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range res {
+		if res[i] == nil {
+			t.Fatalf("result %d missing after 413 re-split", i)
+		}
+	}
+	if len(sizes) != 4 || sizes[0] != 5 {
+		t.Fatalf("expected one 5-batch then 2+2+1: %v", sizes)
 	}
 }

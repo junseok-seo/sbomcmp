@@ -79,14 +79,26 @@ func TestVDBPartialCoverageIsRecorded(t *testing.T) {
 			w.Write([]byte(`{"error":"rate limited"}`))
 			return
 		}
+		// Like VDB without a key: at most 5 per request, answers a prefix and
+		// says so, and the hourly package budget is gone after this one.
+		pkgs := req.Packages
+		var truncated map[string]any
+		if len(pkgs) > 5 {
+			truncated = map[string]any{"checked": 5, "not_checked": len(pkgs) - 5}
+			pkgs = pkgs[:5]
+		}
 		var results []map[string]any
-		for _, p := range req.Packages {
+		for _, p := range pkgs {
 			results = append(results, map[string]any{"input": p, "purl": p, "risk": "high",
 				"vulnerabilities":       []map[string]any{{"id": "CVE-2024-1", "severity_bucket": "high", "severity_score": 8.1, "kev": true, "epss": 0.42}},
 				"vulnerabilities_total": 1})
 		}
-		json.NewEncoder(w).Encode(map[string]any{"results": results,
-			"anonymous": map[string]any{"authenticated": false, "limit_per_hour": 20, "remaining": 0}})
+		out := map[string]any{"results": results,
+			"anonymous": map[string]any{"authenticated": false, "unit": "packages", "limit_per_hour": 100, "remaining": 0, "max_per_request": 5}}
+		if truncated != nil {
+			out["truncated"] = truncated
+		}
+		json.NewEncoder(w).Encode(out)
 	}))
 	defer srv.Close()
 
