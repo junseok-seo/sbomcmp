@@ -249,19 +249,6 @@ func Finalize(res *model.Result) {
 	// has already run by the time Finalize is called.
 	explainSignals(res.Rows)
 	res.Actions, res.ActionTotal = actions(res.Rows, res.MCP)
-	var installed, installedVuln int
-	for _, r := range res.Rows {
-		if r.Installed {
-			installed++
-			if len(r.Vulns) > 0 || len(r.Signals) > 0 {
-				installedVuln++
-			}
-		}
-	}
-	if installedVuln > 0 {
-		res.Recommendation.Caveats = append(res.Recommendation.Caveats,
-			fmt.Sprintf("%d component(s) were seen only inside installed trees (node_modules, .venv, …), %d of them with findings. They describe this machine, not the code's declared dependencies, and are left out of Act now.", installed, installedVuln))
-	}
 	res.Union = len(res.Rows)
 	res.Intersection = 0
 	for _, r := range res.Rows {
@@ -417,6 +404,22 @@ func Finalize(res *model.Result) {
 		rec.Caveats = append(rec.Caveats, fmt.Sprintf("%d component name(s) do not exist on their registry (possible slopsquatting). Check the Signals filter before trusting the manifest.", slop))
 	}
 	res.Recommendation = rec
+
+	// Appended last: the recommendation above is built from scratch and would
+	// otherwise drop this caveat.
+	var installed, installedVuln int
+	for _, r := range res.Rows {
+		if r.Installed {
+			installed++
+			if len(r.Vulns) > 0 || len(r.Signals) > 0 {
+				installedVuln++
+			}
+		}
+	}
+	if installedVuln > 0 {
+		res.Recommendation.Caveats = append(res.Recommendation.Caveats,
+			fmt.Sprintf("%d component(s) were seen only inside installed trees (node_modules, .venv, …), %d of them with findings. They describe this machine, not the code's declared dependencies, and are left out of Act now.", installed, installedVuln))
+	}
 }
 
 // vulnCaveats explains incomplete vulnerability enrichment: a source that

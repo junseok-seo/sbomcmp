@@ -351,3 +351,27 @@ func TestInstalledOnlyRowsStayOutOfActions(t *testing.T) {
 		t.Fatalf("installed row must not produce an action: %+v", acts)
 	}
 }
+
+func TestInstalledCaveatSurvivesFinalize(t *testing.T) {
+	runs := loadMock(t)
+	rows, pairs := Build(runs)
+	rows = append(rows, model.Row{Key: "generic/ffmpeg@61.7.100", NameKey: "generic/ffmpeg", Type: "generic", Name: "ffmpeg", Version: "61.7.100",
+		Cells: map[string]model.Cell{"syft": {Found: true, Paths: []string{"/node_modules/@remotion/x/libavformat.dylib"}}}, FoundBy: []string{"syft"}, Agreement: "single",
+		Installed: true, Vulns: []model.Vuln{{ID: "CVE-X", Severity: "HIGH"}}, MaxSev: "HIGH"})
+	res := &model.Result{Generators: runs, Rows: rows, Pairs: pairs, Vuln: model.VulnMeta{Enabled: true}}
+	Finalize(res)
+	found := false
+	for _, c := range res.Recommendation.Caveats {
+		if contains(c, "installed trees") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("installed caveat missing: %v", res.Recommendation.Caveats)
+	}
+	for _, a := range res.Actions {
+		if a.Key == "generic/ffmpeg@61.7.100" {
+			t.Fatal("installed row must not be an action")
+		}
+	}
+}
