@@ -160,7 +160,53 @@ type Result struct {
 	Recommendation Recommendation `json:"recommendation"`
 	Vuln           VulnMeta       `json:"vuln"`
 	MCP            []MCPServer    `json:"mcpServers"`
-	Notes          []string       `json:"notes,omitempty"`
+	// Actions are the VDB-only findings that need a decision now (malicious
+	// release, exploited advisory, hallucinated name, risky MCP server),
+	// highest priority first, capped at MaxActions. ActionTotal is the
+	// uncapped count.
+	Actions     []Action `json:"actions,omitempty"`
+	ActionTotal int      `json:"actionTotal,omitempty"`
+	Notes       []string `json:"notes,omitempty"`
+}
+
+// Action is one thing to do before trusting the manifest: which component
+// (or MCP server), why, and the fix. Kind is malicious / kev / epss /
+// slopsquat / mcp; Level is refuse or warn.
+type Action struct {
+	Kind    string `json:"kind"`
+	Level   string `json:"level"`
+	Key     string `json:"key"` // component key, or the MCP server name for kind mcp
+	Message string `json:"message"`
+	Fix     string `json:"fix"`
+}
+
+// MaxActions caps Result.Actions; ActionTotal keeps the real count.
+const MaxActions = 20
+
+// ActionLevelRank orders action levels for --fail-on.
+var ActionLevelRank = map[string]int{"refuse": 2, "warn": 1, "none": 0}
+
+// ActionsAtLeast returns the actions whose level is at or above level
+// ("refuse", "warn"); "none" or unknown returns nil.
+func (r *Result) ActionsAtLeast(level string) []Action {
+	min := ActionLevelRank[level]
+	if min == 0 {
+		return nil
+	}
+	var out []Action
+	for _, a := range r.Actions {
+		if ActionLevelRank[a.Level] >= min {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// VDBSignalsActive reports whether the result carries VDB-only data
+// (exploitation, malicious-release, registry and MCP signals): the source is
+// vdb, or a fixture standing in for it.
+func (r *Result) VDBSignalsActive() bool {
+	return r.Vuln.Enabled && (r.Vuln.Source == "vdb" || r.Vuln.VDBExtras)
 }
 
 // Recommendation is the final verdict with evidence.

@@ -52,6 +52,25 @@ header.top .target code{color:var(--ink)}
 .verdict li.caveat::before{background:none;border:2px solid var(--sev-med);width:7px;height:7px;top:13px}
 .verdict .empty{color:var(--muted)}
 
+/* act now: VDB-only findings that need a decision */
+.act{margin-top:20px;max-width:62ch}
+.act h2{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.act h2 .n{margin-left:6px;color:var(--ink);font-variant-numeric:tabular-nums}
+.act ol{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.act li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 10px;align-items:baseline;padding:8px 12px;background:var(--panel);border:1px solid var(--rule);border-left:4px solid var(--sev-med);border-radius:0 4px 4px 0;font-size:14px}
+.act li.refuse{border-left-color:var(--sev-high)}
+.act li .lvl{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--sev-med);white-space:nowrap}
+.act li.refuse .lvl{color:var(--sev-high)}
+.act li .key{font-family:var(--mono);font-size:13px;word-break:break-all}
+.act li .key .kind{font-family:var(--sans);color:var(--muted);font-size:12px;margin-right:6px}
+.act li .why{grid-column:2;color:var(--muted);font-size:13px}
+.act li .fix{grid-column:2;font-weight:600}
+.act li .fix::before{content:"→ ";color:var(--muted);font-weight:400}
+.act .line{color:var(--muted);font-size:13px;padding:8px 12px;border:1px dashed var(--rule);border-radius:4px}
+.act .line code{color:var(--ink)}
+.act .line.ok{border-style:solid;color:var(--ink)}
+.act .more{color:var(--muted);font-size:13px;margin-top:6px}
+
 .coverage{display:grid;gap:10px;align-self:center}
 .coverage .row{display:grid;grid-template-columns:84px 1fr auto;gap:12px;align-items:center}
 .coverage .name{font-weight:600}
@@ -242,9 +261,9 @@ function renderVerdict(){
     h+=`<div><h1>Use <span class="tool">${esc(rec.primary)}</span>.${rec.secondary?` Pair with <span class="tool">${esc(rec.secondary)}</span>.`:""}</h1><ul>`;
     for(const s of rec.reasons||[])h+=`<li>${esc(s)}</li>`;
     for(const s of rec.caveats||[])h+=`<li class="caveat">${esc(s)}</li>`;
-    h+=`</ul></div>`;
+    h+=`</ul>${renderActNow()}</div>`;
   }else{
-    h+=`<div><h1>No usable SBOM.</h1><p class="empty">${esc((rec.reasons||[]).join(" "))}</p></div>`;
+    h+=`<div><h1>No usable SBOM.</h1><p class="empty">${esc((rec.reasons||[]).join(" "))}</p>${renderActNow()}</div>`;
   }
   h+=`<div class="coverage">`;
   const union=R.union||1;
@@ -257,6 +276,27 @@ function renderVerdict(){
   }
   h+=`<div class="legend"><i></i>found by this tool<b></b>found only here and vulnerable</div></div>`;
   $("verdict").innerHTML=h;
+}
+
+// The action list is computed by the scan (compare.Finalize); the viewer only
+// decides between the list, the "need VDB" line and the all-clear line.
+const vdbActive=()=>!!(R.vuln&&R.vuln.enabled&&(R.vuln.source==="vdb"||R.vuln.vdbExtras));
+function renderActNow(){
+  let h=`<div class="act" id="act"><h2>Act now`;
+  if(!vdbActive()){
+    return h+`</h2><div class="line">Exploitation (KEV/EPSS), malicious-release, registry and MCP signals need VDB — set <code>VDB_API_KEY</code> or run with <code>--vuln-source vdb</code>.</div></div>`;
+  }
+  const acts=R.actions||[], total=R.actionTotal||acts.length;
+  if(!acts.length){
+    return h+`</h2><div class="line ok">No VDB-only findings: nothing being exploited, no malicious releases, no unknown names, no unverified MCP servers.</div></div>`;
+  }
+  h+=`<span class="n">${total}</span></h2><ol>`;
+  for(const a of acts){
+    h+=`<li class="${esc(a.level)}"><span class="lvl">${esc(a.level)}</span><span class="key">${a.kind==="mcp"?`<span class="kind">MCP server</span>`:""}${esc(a.key)}</span><span class="why">${esc(a.message)}</span><span class="fix">${esc(a.fix)}</span></li>`;
+  }
+  h+=`</ol>`;
+  if(total>acts.length)h+=`<div class="more">… ${total-acts.length} more in the result file</div>`;
+  return h+`</div>`;
 }
 
 const maxEPSS=r=>Math.max(0,...(r.vulns||[]).map(v=>v.epss||0));

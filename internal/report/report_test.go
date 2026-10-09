@@ -83,3 +83,56 @@ func TestMarkdownEPSSColumnAndOrder(t *testing.T) {
 		t.Fatalf("EPSS column must be omitted without data:\n%s", md)
 	}
 }
+
+func TestMarkdownActNow(t *testing.T) {
+	res := &model.Result{
+		Target:         "demo",
+		Generators:     []model.GeneratorRun{{Name: "syft", Available: true}},
+		Summaries:      []model.ToolSummary{{Name: "syft"}},
+		Recommendation: model.Recommendation{Primary: "syft", Reasons: []string{"syft covers 100% of the union."}},
+		Vuln:           model.VulnMeta{Enabled: true, Source: "vdb", Queried: 3, Answered: 3},
+		Actions: []model.Action{
+			{Kind: "malicious", Level: "refuse", Key: "npm/evil@1.0.0", Message: "MAL-1: known malicious release", Fix: "remove"},
+			{Kind: "kev", Level: "refuse", Key: "npm/kev@2.0.0", Message: "CVE-K: in CISA KEV", Fix: "upgrade to 2.0.1"},
+			{Kind: "mcp", Level: "warn", Key: "browser", Message: "MCP server trust community, scopes exec", Fix: "pin and review the server"},
+		},
+		ActionTotal: 25,
+	}
+	md := Markdown(res, 50)
+	rec, act, table := strings.Index(md, "syft covers 100%"), strings.Index(md, "**Act now** (25)"), strings.Index(md, "| Tool | Version |")
+	if !(rec >= 0 && rec < act && act < table) {
+		t.Fatalf("Act now block must sit between the recommendation and the tool table:\n%s", md)
+	}
+	for _, want := range []string{
+		"| 🛑 refuse | `npm/evil@1.0.0` | MAL-1: known malicious release | **remove** |",
+		"| 🛑 refuse | `npm/kev@2.0.0` | CVE-K: in CISA KEV | **upgrade to 2.0.1** |",
+		"| ⚠️ warn | MCP `browser` | MCP server trust community, scopes exec | **pin and review the server** |",
+		"| … | | 22 more | |",
+	} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("missing %q in:\n%s", want, md)
+		}
+	}
+
+	res.Actions, res.ActionTotal = nil, 0
+	if md = Markdown(res, 50); !strings.Contains(md, "**Act now:** "+NoActionsLine) {
+		t.Fatalf("all-clear line missing:\n%s", md)
+	}
+
+	res.Vuln = model.VulnMeta{Enabled: true, Source: "osv", Queried: 3, Answered: 3}
+	md = Markdown(res, 50)
+	if !strings.Contains(md, "_"+NeedVDBLine+"_") || strings.Contains(md, "Act now") {
+		t.Fatalf("osv run must show the need-VDB line only:\n%s", md)
+	}
+
+	// A fixture that stands in for VDB (vdbExtras) counts as VDB-active.
+	res.Vuln = model.VulnMeta{Enabled: true, Source: "fixture", VDBExtras: true}
+	if md = Markdown(res, 50); !strings.Contains(md, NoActionsLine) {
+		t.Fatalf("fixture with vdbExtras:\n%s", md)
+	}
+
+	lines := ActionLines([]model.Action{{Kind: "mcp", Level: "warn", Key: "browser", Message: "m", Fix: "f"}})
+	if len(lines) != 1 || lines[0] != "[warn] MCP browser — m → f" {
+		t.Fatalf("ActionLines: %q", lines)
+	}
+}
