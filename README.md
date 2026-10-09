@@ -115,6 +115,7 @@ sbomcmp scan ./repo
 With VDB active:
 
 - Rows whose name **does not exist on the registry** get a `slopsquat` signal. That turns "found only by tool A" into "tool A copied a hallucinated dependency out of the manifest". Packages the project declares itself (its own `package.json`, `Cargo.toml`, `pyproject.toml`, `go.mod`, or a generator's `metadata.component`) are marked **first-party** and left out of registry checks, so an unpublished internal package is not reported as squatting.
+- Every cell keeps the **evidence paths** the tool reported (lockfile, manifest, binary), shown when you expand a row. A row seen only inside an installed tree (`node_modules`, `.venv`, `site-packages`, …) and never in a tracked manifest or lockfile is marked **installed**: it describes this machine, not the code's declared dependencies, so it stays in the matrix (filter: *Installed only*) but is left out of Act now.
 - Discovered MCP servers get a **Registry** column: trust tier, scopes, risk score, and recent scope changes. Servers VDB has never seen are marked unverified.
 - Advisories carry **KEV** and **EPSS** so a critical nobody exploits ranks below a medium that is being exploited, and **malicious releases** (MAL-* reports) are flagged as something to remove, not upgrade. The viewer sorts by KEV, then EPSS, then severity when VDB data is present, and the report's "Disagreements that matter" table gains an EPSS column.
 

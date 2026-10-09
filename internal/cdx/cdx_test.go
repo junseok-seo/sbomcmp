@@ -65,3 +65,28 @@ func TestParseRejectsGarbage(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestEvidencePaths(t *testing.T) {
+	doc := `{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+	  {"type":"library","name":"a","version":"1","purl":"pkg:npm/a@1",
+	   "properties":[{"name":"syft:location:0:path","value":"/web/package-lock.json"},{"name":"syft:location:1:path","value":"/web/node_modules/a/package.json"}]},
+	  {"type":"library","name":"b","version":"2","purl":"pkg:npm/b@2",
+	   "properties":[{"name":"SrcFile","value":"../x/package-lock.json"}],
+	   "evidence":{"identity":[{"field":"purl","methods":[{"technique":"manifest-analysis","value":"../x/package-lock.json"}]}],"occurrences":[{"location":"../x/package.json"}]}},
+	  {"type":"library","name":"a","version":"1","purl":"pkg:npm/a@1","properties":[{"name":"syft:location:0:path","value":"/other/package.json"}]}
+	]}`
+	comps, _, _, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, p := range comps[0].Paths {
+		got[p] = true
+	}
+	if len(comps) != 2 || len(got) != 3 || !got["/other/package.json"] || !got["/web/package-lock.json"] {
+		t.Fatalf("syft paths (merged across duplicates): %+v", comps[0].Paths)
+	}
+	if len(comps[1].Paths) != 2 || comps[1].Paths[0] != "../x/package-lock.json" || comps[1].Paths[1] != "../x/package.json" {
+		t.Fatalf("cdxgen paths: %+v", comps[1].Paths)
+	}
+}

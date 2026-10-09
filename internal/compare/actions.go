@@ -76,6 +76,11 @@ func firstSignalMessage(sigs []model.Signal, kind string) string {
 func actions(rows []model.Row, servers []model.MCPServer) ([]model.Action, int) {
 	var mal, kev, epss, slop, mcp []model.Action
 	for _, r := range rows {
+		if r.Installed {
+			// Seen only inside node_modules / .venv / …: what is on this
+			// machine, not what the code declares. Stays in the matrix.
+			continue
+		}
 		switch {
 		case r.HasMalicious():
 			v := pickVuln(r.Vulns, func(v model.Vuln) bool { return v.Malicious })
