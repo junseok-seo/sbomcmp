@@ -1,0 +1,8 @@
+golang/github.com/gin-gonic/gin@1.9.1
+golang/github.com/gorilla/mux@1.8.1
+golang/golang.org/x/crypto@0.17.0
+pypi/cryptography@42.0.0
+pypi/flask-login@0.6.3
+pypi/flask@3.0.2
+pypi/pyyaml@6.0.1
+pypi/requests@2.31.0

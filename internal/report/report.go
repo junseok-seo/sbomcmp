@@ -50,6 +50,11 @@ func Markdown(res *model.Result, maxRows int) string {
 			w("| %s | — | — | — | — | — | — | _%s_ | — |\n", g.Name, cell(g.Error))
 		}
 	}
+	for _, g := range res.Generators {
+		if g.Note != "" {
+			w("\n- ⚠️ %s: %s", g.Name, cell(g.Note))
+		}
+	}
 	w("\nUnion **%d** · all tools agree on **%d** · vulnerability source: %s", res.Union, res.Intersection, res.Vuln.Source)
 	if res.Vuln.Anonymous {
 		w(" (anonymous)")
