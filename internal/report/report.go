@@ -210,6 +210,9 @@ func VulnStatus(res *model.Result) string {
 	} else {
 		fmt.Fprintf(&b, " · answered %d of %d", v.Answered, v.Queried)
 	}
+	if v.FirstParty > 0 {
+		fmt.Fprintf(&b, " · %d first-party (not checked)", v.FirstParty)
+	}
 	if v.DetailsCapped > 0 {
 		fmt.Fprintf(&b, " · %d advisories unscored (OSV detail cap), shown as UNKNOWN", v.DetailsCapped)
 	}

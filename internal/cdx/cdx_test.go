@@ -29,6 +29,24 @@ func TestParseCycloneDXNestedAndScope(t *testing.T) {
 	}
 }
 
+func TestParseDocRoot(t *testing.T) {
+	doc := `{"bomFormat":"CycloneDX","specVersion":"1.6",
+	  "metadata":{"component":{"type":"application","name":"sample-app","version":"1.0.0","purl":"pkg:npm/sample-app@1.0.0"}},
+	  "components":[{"type":"library","name":"a","version":"1","purl":"pkg:npm/a@1"}]}`
+	d, err := ParseDoc([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Root == nil || d.Root.NameKey != "npm/sample-app" || d.Root.Version != "1.0.0" || len(d.Components) != 1 {
+		t.Fatalf("root not parsed: %+v", d)
+	}
+	// Trivy's root is a path with no purl and no version: not a package.
+	d, _ = ParseDoc([]byte(`{"bomFormat":"CycloneDX","metadata":{"component":{"type":"application","name":"src/project"}},"components":[]}`))
+	if d.Root != nil {
+		t.Fatalf("path root must be ignored: %+v", d.Root)
+	}
+}
+
 func TestParseSPDXFallback(t *testing.T) {
 	doc := `{"SPDXID":"SPDXRef-DOCUMENT","packages":[
 	  {"name":"lodash","versionInfo":"4.17.21","licenseConcluded":"MIT",

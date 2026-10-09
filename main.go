@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/junseok-seo/sbomcmp/internal/compare"
+	"github.com/junseok-seo/sbomcmp/internal/firstparty"
 	"github.com/junseok-seo/sbomcmp/internal/gen"
 	"github.com/junseok-seo/sbomcmp/internal/mcp"
 	"github.com/junseok-seo/sbomcmp/internal/model"
@@ -175,6 +176,21 @@ func cmdScan(args []string) error {
 
 	res.Rows, res.Pairs = compare.Build(runs)
 	log(fmt.Sprintf("union %d components across %d tools", len(res.Rows), countOK(runs)))
+
+	// Packages the project declares itself are not registry dependencies:
+	// keep them out of slopsquatting checks and say why in the viewer.
+	var decls []firstparty.Decl
+	if kind == "dir" {
+		decls = firstparty.Collect(target)
+	}
+	for _, r := range runs {
+		if d := firstparty.FromRoot(r.Name, r.Root); d != nil {
+			decls = append(decls, *d)
+		}
+	}
+	if n := firstparty.Mark(res.Rows, decls); n > 0 {
+		log(fmt.Sprintf("%d component(s) are the project's own packages (not checked against registries)", n))
+	}
 
 	if kind == "dir" && !*noMCP {
 		res.MCP = mcp.Discover(target)

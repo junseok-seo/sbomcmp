@@ -266,16 +266,18 @@ func runOne(ctx context.Context, a Adapter, opt Options, path string) model.Gene
 		return r
 	}
 	r.RawPath = outPath
-	comps, format, skipped, perr := cdx.Parse(data)
+	doc, perr := cdx.ParseDoc(data)
 	if perr != nil {
 		r.Error = "parse: " + perr.Error()
 		opt.Log(fmt.Sprintf("[%s] parse error: %v", a.Name, perr))
 		return r
 	}
+	comps, format := doc.Components, doc.Format
 	r.Components = comps
 	r.Count = len(comps)
 	r.Format = format
-	r.Skipped = skipped
+	r.Skipped = doc.Skipped
+	r.Root = doc.Root
 	for _, c := range comps {
 		r.Types[c.Type]++
 	}

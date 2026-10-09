@@ -61,22 +61,25 @@ func New(endpoint, apiKey string, timeout time.Duration) *Client {
 
 // Result is one entry of check-packages' results[], aligned with the input.
 type Result struct {
-	Input       string    `json:"input"`
-	Purl        string    `json:"purl"`
-	Version     string    `json:"version"`
-	Matched     bool      `json:"matched"`
-	Risk        string    `json:"risk"` // high / medium / low / unknown / not_found
-	AgentAction string    `json:"agent_action"`
-	Because     string    `json:"because"`
-	Reason      string    `json:"reason"`
-	SafeUpgrade string    `json:"safe_upgrade"`
-	Flags       []Flag    `json:"flags"`
-	Registry    *Probe    `json:"registry"`
-	MCP         *MCP      `json:"mcp"`
-	Model       *Model    `json:"model"`
-	Vulns       []VulnHit `json:"vulnerabilities"`
-	VulnsTotal  int       `json:"vulnerabilities_total"`
-	WorstBucket string    `json:"worst_bucket"` // worst severity across all advisories, including truncated ones
+	Input   string `json:"input"`
+	Purl    string `json:"purl"`
+	Version string `json:"version"`
+	// VersionEvaluated is false when the purl carried no version: the
+	// advisories are then the package's whole history, not a verdict.
+	VersionEvaluated *bool     `json:"version_evaluated"`
+	Matched          bool      `json:"matched"`
+	Risk             string    `json:"risk"` // high / medium / low / unknown / not_found
+	AgentAction      string    `json:"agent_action"`
+	Because          string    `json:"because"`
+	Reason           string    `json:"reason"`
+	SafeUpgrade      string    `json:"safe_upgrade"`
+	Flags            []Flag    `json:"flags"`
+	Registry         *Probe    `json:"registry"`
+	MCP              *MCP      `json:"mcp"`
+	Model            *Model    `json:"model"`
+	Vulns            []VulnHit `json:"vulnerabilities"`
+	VulnsTotal       int       `json:"vulnerabilities_total"`
+	WorstBucket      string    `json:"worst_bucket"` // worst severity across all advisories, including truncated ones
 }
 
 // Flag is a slopsquatting advisory attached to the exact purl.

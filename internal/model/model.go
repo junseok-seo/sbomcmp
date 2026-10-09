@@ -33,6 +33,7 @@ type GeneratorRun struct {
 	Format     string         `json:"format,omitempty"`  // cyclonedx-1.6 / spdx
 	Count      int            `json:"count"`
 	Skipped    int            `json:"skipped,omitempty"` // version-less entries not comparable
+	Root       *Component     `json:"root,omitempty"`    // CycloneDX metadata.component (the scanned subject)
 	Types      map[string]int `json:"types"`             // purl type -> count
 	Components []Component    `json:"-"`                 // not serialized here; see Rows
 }
@@ -61,6 +62,11 @@ type Row struct {
 	VulnTotal int             `json:"vulnTotal,omitempty"`   // > len(Vulns) when the source truncated the list
 	MaxSev    string          `json:"maxSeverity,omitempty"` // CRITICAL/HIGH/MEDIUM/LOW/UNKNOWN
 	Signals   []Signal        `json:"signals,omitempty"`     // non-CVE signals (slopsquat etc.)
+	// FirstParty marks a package the project declares itself (its own
+	// package.json, Cargo.toml, pyproject.toml, go.mod or a generator's
+	// metadata.component). Not a registry dependency: never a slopsquat.
+	FirstParty       bool   `json:"firstParty,omitempty"`
+	FirstPartySource string `json:"firstPartySource,omitempty"`
 }
 
 // Vuln is a vulnerability hit from an OSV-compatible source.
@@ -163,12 +169,13 @@ type Recommendation struct {
 
 // VulnMeta records which vulnerability source was used.
 type VulnMeta struct {
-	Enabled  bool   `json:"enabled"`
-	Source   string `json:"source"` // osv / vdb / fixture / none
-	Endpoint string `json:"endpoint,omitempty"`
-	Queried  int    `json:"queried"`  // rows sent to the source
-	Answered int    `json:"answered"` // rows the source actually answered (== Queried when complete)
-	Hits     int    `json:"hits"`
+	Enabled    bool   `json:"enabled"`
+	Source     string `json:"source"` // osv / vdb / fixture / none
+	Endpoint   string `json:"endpoint,omitempty"`
+	Queried    int    `json:"queried"`              // rows sent to the source
+	Answered   int    `json:"answered"`             // rows the source actually answered (== Queried when complete)
+	FirstParty int    `json:"firstParty,omitempty"` // rows skipped because the project declares them itself
+	Hits       int    `json:"hits"`
 	// DetailsCapped counts advisories left at UNKNOWN severity because the
 	// OSV per-advisory detail fetch cap was hit (osv source only).
 	DetailsCapped int    `json:"detailsCapped,omitempty"`
