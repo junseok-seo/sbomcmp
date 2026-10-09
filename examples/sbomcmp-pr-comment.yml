@@ -1,7 +1,6 @@
-# Runs every available SBOM generator on each PR, compares them, and posts
-# the Markdown report as a PR comment. Copy into any repository; replace the
-# "Build sbomcmp" step with `go install github.com/junseok-seo/sbomcmp@latest`
-# (or download a release binary) when the repository is not sbomcmp itself.
+# Example workflow: runs every available SBOM generator on each PR, compares
+# them, and posts (or updates) the Markdown report as a PR comment.
+# Copy to .github/workflows/sbomcmp.yml in your repository.
 name: sbomcmp
 
 on:
@@ -30,8 +29,8 @@ jobs:
           npm install -g @cyclonedx/cdxgen
           trivy --version && syft version && cdxgen --version
 
-      - name: Build sbomcmp
-        run: go build -o "$HOME/go/bin/sbomcmp" . && echo "$HOME/go/bin" >> "$GITHUB_PATH"
+      - name: Install sbomcmp
+        run: go install github.com/junseok-seo/sbomcmp@latest && echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
       - name: Scan
         env:

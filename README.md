@@ -138,7 +138,7 @@ The coverage matrix is derived from the run, never hard-coded, so it does not ro
 
 ## CI
 
-[`.github/workflows/sbomcmp.yml`](.github/workflows/sbomcmp.yml) installs the generators, scans on every PR, uploads the raw SBOMs, and posts (or updates) a single PR comment with the report. Copy it into any repository; add `VDB_API_KEY` as a repository secret to switch the vulnerability source to VDB.
+[`examples/sbomcmp-pr-comment.yml`](examples/sbomcmp-pr-comment.yml) installs the generators, scans on every PR, uploads the raw SBOMs, and posts (or updates) a single PR comment with the report. Copy it to `.github/workflows/` in any repository; add `VDB_API_KEY` as a repository secret to switch the vulnerability source to VDB.
 
 ## Development
 
