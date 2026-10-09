@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/junseok-seo/sbomcmp/internal/model"
@@ -114,21 +115,94 @@ func TestCheckParsesLiveShapeAndBatches(t *testing.T) {
 	}
 }
 
-func TestCheckSendsBearerAndStopsOnQuota(t *testing.T) {
+func TestCheckKeyedRunsAllBatchesWithBearer(t *testing.T) {
+	var mu sync.Mutex
+	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer vdb_test" {
 			t.Errorf("missing bearer: %q", r.Header.Get("Authorization"))
 		}
-		w.Write([]byte(`{"results":[{"input":"a","risk":"low"}],"agent_action":"PROCEED","anonymous":{"remaining":0}}`))
+		var req struct {
+			Packages []string `json:"packages"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		res := make([]map[string]any, 0, len(req.Packages))
+		for _, p := range req.Packages {
+			res = append(res, map[string]any{"input": p, "risk": "low"})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"results": res, "agent_action": "PROCEED"})
 	}))
 	defer srv.Close()
 	c := New(srv.URL, "vdb_test", 0)
+	c.Batch = 2
+	purls := []string{"a", "b", "c", "d", "e"}
+	res, quota, err := c.Check(context.Background(), purls)
+	if err != nil || quota != nil {
+		t.Fatalf("err=%v quota=%v", err, quota)
+	}
+	if calls != 3 {
+		t.Fatalf("expected 3 batches, got %d", calls)
+	}
+	for i, p := range purls {
+		if res[i] == nil || res[i].Input != p {
+			t.Fatalf("result %d misaligned: %+v", i, res[i])
+		}
+	}
+}
+
+func TestCheckSplitsBatchOn5xx(t *testing.T) {
+	var mu sync.Mutex
+	var sizes []int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Packages []string `json:"packages"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		sizes = append(sizes, len(req.Packages))
+		mu.Unlock()
+		if len(req.Packages) > 2 {
+			http.Error(w, "upstream timeout", http.StatusBadGateway)
+			return
+		}
+		res := make([]map[string]any, 0, len(req.Packages))
+		for _, p := range req.Packages {
+			res = append(res, map[string]any{"input": p, "risk": "low"})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"results": res, "agent_action": "PROCEED"})
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "vdb_test", 0)
+	c.Batch = 4
+	res, _, err := c.Check(context.Background(), []string{"a", "b", "c", "d"})
+	if err != nil {
+		t.Fatalf("halves should have succeeded: %v", err)
+	}
+	for i := range res {
+		if res[i] == nil {
+			t.Fatalf("result %d missing after split retry", i)
+		}
+	}
+	if len(sizes) != 3 || sizes[0] != 4 {
+		t.Fatalf("expected one 4-batch then two halves, got %v", sizes)
+	}
+}
+
+func TestCheckAnonymousStopsOnQuota(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"results":[{"input":"a","risk":"low"}],"agent_action":"PROCEED","anonymous":{"remaining":0}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "", 0)
 	c.Batch = 1
-	res, _, err := c.Check(context.Background(), []string{"a", "b", "c"})
+	res, quota, err := c.Check(context.Background(), []string{"a", "b", "c"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res[0] == nil || res[1] != nil || res[2] != nil {
-		t.Fatalf("expected to stop after quota hit 0: %v", res)
+	if res[0] == nil || res[1] != nil || res[2] != nil || quota == nil || quota.Remaining != 0 {
+		t.Fatalf("expected to stop after quota hit 0: %v %v", res, quota)
 	}
 }
