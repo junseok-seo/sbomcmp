@@ -314,9 +314,7 @@ func Finalize(res *model.Result) {
 			rec.Caveats = append(rec.Caveats, fmt.Sprintf("%s alone finds %d critical/high vulnerable components. Dropping it has a security cost.", s.Name, s.UniqueCritHigh))
 		}
 	}
-	if !res.Vuln.Enabled {
-		rec.Caveats = append(rec.Caveats, "Vulnerability weighting was not applied (offline or disabled). Scores reflect coverage only.")
-	}
+	rec.Caveats = append(rec.Caveats, vulnCaveats(res.Vuln)...)
 	if len(res.MCP) > 0 {
 		msg := fmt.Sprintf("%d MCP server(s) are configured in this project. No SBOM generator lists them — this is a shared blind spot.", len(res.MCP))
 		var refuse, unverified int
@@ -352,4 +350,34 @@ func Finalize(res *model.Result) {
 		rec.Caveats = append(rec.Caveats, fmt.Sprintf("%d component name(s) do not exist on their registry (possible slopsquatting). Check the Signals filter before trusting the manifest.", slop))
 	}
 	res.Recommendation = rec
+}
+
+// vulnCaveats explains incomplete vulnerability enrichment: a source that
+// answered only part of the queries (VDB's anonymous quota), advisories OSV
+// left unscored because of the detail cap, or no enrichment at all.
+func vulnCaveats(v model.VulnMeta) []string {
+	var out []string
+	if v.Enabled && v.Answered < v.Queried {
+		why := "the source stopped answering"
+		if v.Error != "" {
+			why = v.Error
+		}
+		if v.Source == "vdb" && v.Anonymous {
+			why = "VDB anonymous quota — set VDB_API_KEY for full coverage"
+		}
+		out = append(out, fmt.Sprintf("Vulnerability weighting covered only %d of %d disagreement rows (%s).", v.Answered, v.Queried, why))
+	}
+	if v.DetailsCapped > 0 {
+		out = append(out, fmt.Sprintf("%d advisories were not scored (OSV detail cap); shown as UNKNOWN.", v.DetailsCapped))
+	}
+	if len(out) == 0 && !v.Enabled && v.Source != "none" {
+		msg := "Vulnerability weighting was not applied (offline or disabled)."
+		if v.Error != "" {
+			msg = "Vulnerability weighting was not applied: " + v.Error + "."
+		}
+		out = append(out, msg+" Scores reflect coverage only.")
+	} else if len(out) == 0 && v.Source == "none" {
+		out = append(out, "Vulnerability weighting was not applied (disabled with --no-vuln). Scores reflect coverage only.")
+	}
+	return out
 }

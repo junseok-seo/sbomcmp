@@ -55,17 +55,8 @@ func Markdown(res *model.Result, maxRows int) string {
 			w("\n- ⚠️ %s: %s", g.Name, cell(g.Note))
 		}
 	}
-	w("\nUnion **%d** · all tools agree on **%d** · vulnerability source: %s", res.Union, res.Intersection, res.Vuln.Source)
-	if res.Vuln.Anonymous {
-		w(" (anonymous)")
-	}
-	if res.Vuln.Error != "" {
-		w(" (_%s_)", cell(res.Vuln.Error))
-	}
-	if res.Vuln.Note != "" {
-		w(" (_%s_)", cell(res.Vuln.Note))
-	}
-	w("\n\n")
+	w("\nUnion **%d** · all tools agree on **%d**\n\n", res.Union, res.Intersection)
+	w("%s\n\n", VulnStatus(res))
 
 	if len(res.Pairs) > 0 {
 		w("### Pairwise\n\n| A | B | both | only A | only B | Jaccard | version disagreements |\n|---|---|---:|---:|---:|---:|---:|\n")
@@ -82,14 +73,41 @@ func Markdown(res *model.Result, maxRows int) string {
 			hot = append(hot, r)
 		}
 	}
+	// With VDB data, exploited-in-the-wild (KEV) and likely-to-be-exploited
+	// (EPSS) advisories outrank raw severity.
+	var epss bool
+	for _, r := range hot {
+		if r.MaxEPSS() > 0 {
+			epss = true
+			break
+		}
+	}
 	sort.SliceStable(hot, func(i, j int) bool {
-		return model.SeverityRank[hot[i].MaxSev] > model.SeverityRank[hot[j].MaxSev]
+		a, b := hot[i], hot[j]
+		if epss {
+			if a.HasKEV() != b.HasKEV() {
+				return a.HasKEV()
+			}
+			if ea, eb := a.MaxEPSS(), b.MaxEPSS(); ea != eb {
+				return ea > eb
+			}
+		}
+		return model.SeverityRank[a.MaxSev] > model.SeverityRank[b.MaxSev]
 	})
 	if len(hot) > 0 {
-		w("### Disagreements that matter\n\n| Component | Found by | Severity | Vulns / signals | Why tools disagree |\n|---|---|---|---|---|\n")
+		w("### Disagreements that matter\n\n")
+		if epss {
+			w("| Component | Found by | Severity | EPSS | Vulns / signals | Why tools disagree |\n|---|---|---|---:|---|---|\n")
+		} else {
+			w("| Component | Found by | Severity | Vulns / signals | Why tools disagree |\n|---|---|---|---|---|\n")
+		}
 		for i, r := range hot {
 			if i >= maxRows {
-				w("| … | | | | %d more |\n", len(hot)-maxRows)
+				if epss {
+					w("| … | | | | | %d more |\n", len(hot)-maxRows)
+				} else {
+					w("| … | | | | %d more |\n", len(hot)-maxRows)
+				}
 				break
 			}
 			var ids []string
@@ -106,8 +124,17 @@ func Markdown(res *model.Result, maxRows int) string {
 			for _, s := range r.Signals {
 				ids = append(ids, fmt.Sprintf("%s:%s", s.Kind, s.Level))
 			}
-			w("| `%s` | %s | %s | %s | %s |\n", r.Key, strings.Join(r.FoundBy, ", "), r.MaxSev,
-				strings.Join(ids, "<br>"), cell(strings.Join(r.Reasons, "<br>")))
+			if epss {
+				e := "—"
+				if v := r.MaxEPSS(); v > 0 {
+					e = fmt.Sprintf("%.1f%%", v*100)
+				}
+				w("| `%s` | %s | %s | %s | %s | %s |\n", r.Key, strings.Join(r.FoundBy, ", "), r.MaxSev, e,
+					strings.Join(ids, "<br>"), cell(strings.Join(r.Reasons, "<br>")))
+			} else {
+				w("| `%s` | %s | %s | %s | %s |\n", r.Key, strings.Join(r.FoundBy, ", "), r.MaxSev,
+					strings.Join(ids, "<br>"), cell(strings.Join(r.Reasons, "<br>")))
+			}
 		}
 		w("\n")
 	}
@@ -145,3 +172,80 @@ func Markdown(res *model.Result, maxRows int) string {
 
 // cell escapes pipes so free text cannot break a Markdown table.
 func cell(s string) string { return strings.ReplaceAll(s, "|", "\\|") }
+
+// VulnStatus is the one-line coverage summary of the vulnerability source:
+// which source, keyed or anonymous, how many queries were answered, what VDB
+// added, and the fix when coverage is incomplete. The viewer renders the same
+// line as its status strip.
+func VulnStatus(res *model.Result) string {
+	v := res.Vuln
+	var b strings.Builder
+	b.WriteString("Vulnerability data: ")
+	switch {
+	case v.Source == "none" || v.Source == "":
+		b.WriteString("none (disabled) — scores reflect coverage only.")
+		return b.String()
+	case !v.Enabled:
+		fmt.Fprintf(&b, "%s — not applied", v.Source)
+		if v.Error != "" {
+			fmt.Fprintf(&b, " (_%s_)", cell(v.Error))
+		}
+		b.WriteString(" — scores reflect coverage only.")
+		return b.String()
+	}
+	b.WriteString(v.Source)
+	if v.Source == "vdb" {
+		if v.Anonymous {
+			b.WriteString(" (anonymous)")
+		} else {
+			b.WriteString(" (keyed)")
+		}
+	}
+	short := v.Answered < v.Queried
+	if short {
+		fmt.Fprintf(&b, " · ⚠️ answered **%d of %d**", v.Answered, v.Queried)
+	} else {
+		fmt.Fprintf(&b, " · answered %d of %d", v.Answered, v.Queried)
+	}
+	if v.DetailsCapped > 0 {
+		fmt.Fprintf(&b, " · %d advisories unscored (OSV detail cap), shown as UNKNOWN", v.DetailsCapped)
+	}
+	if v.Source == "vdb" || v.VDBExtras {
+		a := model.SummarizeVDB(res)
+		if !a.Any() {
+			b.WriteString(" · no VDB-only signals in this project")
+		} else {
+			var parts []string
+			if a.KEVRows > 0 {
+				parts = append(parts, fmt.Sprintf("%d KEV %s", a.KEVRows, plural(a.KEVRows, "row")))
+			}
+			if a.EPSSRows > 0 {
+				parts = append(parts, fmt.Sprintf("%d %s with EPSS ≥ %.0f%%", a.EPSSRows, plural(a.EPSSRows, "row"), model.EPSSNotable*100))
+			}
+			if a.SlopRows > 0 {
+				parts = append(parts, fmt.Sprintf("%d slopsquat %s", a.SlopRows, plural(a.SlopRows, "signal")))
+			}
+			if a.MCPRegistry > 0 {
+				parts = append(parts, fmt.Sprintf("%d MCP registry %s", a.MCPRegistry, plural(a.MCPRegistry, "hit")))
+			}
+			b.WriteString(" · VDB added: " + strings.Join(parts, ", "))
+		}
+	}
+	if short {
+		if v.Source == "vdb" && v.Anonymous {
+			b.WriteString(" — anonymous quota; `export VDB_API_KEY=…` (free at vdb.ai.kr/signup) for full coverage")
+		} else if v.Error != "" {
+			fmt.Fprintf(&b, " — _%s_", cell(v.Error))
+		}
+	} else if v.Error != "" {
+		fmt.Fprintf(&b, " (_%s_)", cell(v.Error))
+	}
+	return b.String()
+}
+
+func plural(n int, s string) string {
+	if n == 1 {
+		return s
+	}
+	return s + "s"
+}

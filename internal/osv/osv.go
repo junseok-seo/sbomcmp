@@ -156,18 +156,27 @@ func (c *Client) do(ctx context.Context, method, url string, body []byte) ([]byt
 	return data, nil
 }
 
+// Stats describes what one Enrich call managed to do.
+type Stats struct {
+	Answered      int // rows the batch query answered (all of them, or none on error)
+	DetailsCapped int // advisories left at UNKNOWN because MaxDetails was hit
+}
+
 // Enrich fills rows[idx] with vulnerabilities. Detail fetches are capped at
 // MaxDetails and prioritize rows the tools disagree on, because those drive
-// the recommendation; the rest keep IDs only with UNKNOWN severity.
-func (c *Client) Enrich(ctx context.Context, rows []model.Row, idx []int, purlFor func(model.Row) string, source string) error {
+// the recommendation; the rest keep IDs only with UNKNOWN severity, and
+// Stats.DetailsCapped says how many.
+func (c *Client) Enrich(ctx context.Context, rows []model.Row, idx []int, purlFor func(model.Row) string, source string) (Stats, error) {
+	var st Stats
 	purls := make([]string, len(idx))
 	for k, i := range idx {
 		purls[k] = purlFor(rows[i])
 	}
 	ids, err := c.QueryBatch(ctx, purls)
 	if err != nil {
-		return err
+		return st, err
 	}
+	st.Answered = len(idx)
 	type ref struct{ row, vi int }
 	var refs []ref
 	for k, i := range idx {
@@ -180,6 +189,7 @@ func (c *Client) Enrich(ctx context.Context, rows []model.Row, idx []int, purlFo
 		ra, rb := rows[refs[a].row].Agreement == "all", rows[refs[b].row].Agreement == "all"
 		return !ra && rb
 	})
+	all := refs
 	if c.MaxDetails > 0 && len(refs) > c.MaxDetails {
 		refs = refs[:c.MaxDetails]
 	}
@@ -214,10 +224,15 @@ func (c *Client) Enrich(ctx context.Context, rows []model.Row, idx []int, purlFo
 		}(id)
 	}
 	wg.Wait()
-	for _, rf := range refs {
+	// Apply to every reference, including those past the cap: an advisory
+	// fetched for one row is good for every row it hits.
+	for k, rf := range all {
 		v := &rows[rf.row].Vulns[rf.vi]
 		d := details[v.ID]
 		if d == nil {
+			if k >= len(refs) {
+				st.DetailsCapped++
+			}
 			continue
 		}
 		v.Aliases = d.Aliases
@@ -228,7 +243,7 @@ func (c *Client) Enrich(ctx context.Context, rows []model.Row, idx []int, purlFo
 	for _, i := range idx {
 		rows[i].MaxSev = model.MaxSeverity(rows[i].Vulns)
 	}
-	return nil
+	return st, nil
 }
 
 // SeverityOf buckets an OSV record: CVSS v3 vector first, then the database

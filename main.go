@@ -193,7 +193,7 @@ func cmdScan(args []string) error {
 		log(fmt.Sprintf("enriching with vulnerability data (%s)…", vcfg.Resolve()))
 		vuln.Enrich(ctx, vcfg, res.Rows, &res.Vuln)
 		if res.Vuln.Enabled {
-			log(fmt.Sprintf("vuln: %s — %d queried, %d with findings", res.Vuln.Source, res.Vuln.Queried, res.Vuln.Hits))
+			log(fmt.Sprintf("vuln: %s — %d queried, %d answered, %d with findings", res.Vuln.Source, res.Vuln.Queried, res.Vuln.Answered, res.Vuln.Hits))
 			if res.Vuln.Note != "" {
 				log("vuln: " + res.Vuln.Note)
 			}

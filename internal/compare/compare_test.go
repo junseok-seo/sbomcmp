@@ -138,3 +138,51 @@ func TestFinalizeRecommendsByCoverageAndVulns(t *testing.T) {
 }
 
 func contains(s, sub string) bool { return indexAfter(s, sub) >= 0 }
+
+func TestFinalizeExplainsIncompleteEnrichment(t *testing.T) {
+	has := func(cs []string, sub string) bool {
+		for _, c := range cs {
+			if contains(c, sub) {
+				return true
+			}
+		}
+		return false
+	}
+	run := func(v model.VulnMeta) []string {
+		runs := loadMock(t)
+		rows, pairs := Build(runs)
+		res := &model.Result{Generators: runs, Rows: rows, Pairs: pairs, Vuln: v}
+		Finalize(res)
+		return res.Recommendation.Caveats
+	}
+
+	// Anonymous VDB quota: partial coverage, with the fix.
+	cs := run(model.VulnMeta{Enabled: true, Source: "vdb", Anonymous: true, Queried: 1168, Answered: 50})
+	if !has(cs, "covered only 50 of 1168 disagreement rows (VDB anonymous quota — set VDB_API_KEY for full coverage)") {
+		t.Fatalf("missing coverage caveat: %v", cs)
+	}
+	if has(cs, "offline or disabled") {
+		t.Fatalf("generic caveat must be dropped: %v", cs)
+	}
+
+	// OSV detail cap.
+	cs = run(model.VulnMeta{Enabled: true, Source: "osv", Queried: 40, Answered: 40, DetailsCapped: 12})
+	if !has(cs, "12 advisories were not scored (OSV detail cap); shown as UNKNOWN") {
+		t.Fatalf("missing detail-cap caveat: %v", cs)
+	}
+	if has(cs, "offline or disabled") || has(cs, "covered only") {
+		t.Fatalf("unexpected caveats: %v", cs)
+	}
+
+	// Complete run: no vulnerability caveat at all.
+	cs = run(model.VulnMeta{Enabled: true, Source: "osv", Queried: 40, Answered: 40})
+	if has(cs, "Vulnerability weighting") || has(cs, "advisories were not scored") {
+		t.Fatalf("unexpected caveat on a complete run: %v", cs)
+	}
+
+	// Disabled or failed: the generic caveat stays.
+	cs = run(model.VulnMeta{Source: "osv", Error: "dial tcp: no route"})
+	if !has(cs, "not applied: dial tcp: no route") {
+		t.Fatalf("missing generic caveat: %v", cs)
+	}
+}

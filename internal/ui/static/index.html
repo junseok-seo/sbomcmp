@@ -10,6 +10,7 @@
   --accent:#1F4FD8; --accent-soft:#E4EAFB;
   --sev-low:#B8921F; --sev-med:#D97A1F; --sev-high:#C2452B; --sev-crit:#7A1E2B; --sev-unk:#8A93A0;
   --signal:#6B3FA0; --signal-soft:#EFE8F7;
+  --warn:#9A5A0E; --warn-soft:#FBF1E3;
   --dot:#15181D; --dot-empty:#C9CED6;
   --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
   --sans:"IBM Plex Sans","Source Sans 3","Segoe UI",system-ui,-apple-system,sans-serif;
@@ -19,6 +20,7 @@
     --bg:#15181D; --panel:#1D2127; --ink:#ECEEF1; --muted:#9AA3AF; --rule:#343A43; --rule-soft:#282D35;
     --accent:#7C9BFF; --accent-soft:#232C44; --dot:#ECEEF1; --dot-empty:#3B424C;
     --signal:#B392E8; --signal-soft:#2B2338; --sev-unk:#6F7884;
+    --warn:#F0B35C; --warn-soft:#332715;
   }
 }
 *{box-sizing:border-box}
@@ -61,6 +63,15 @@ header.top .target code{color:var(--ink)}
 .coverage .legend{color:var(--muted);font-size:13px;margin-top:4px}
 .coverage .legend i{display:inline-block;width:10px;height:10px;vertical-align:-1px;margin-right:4px;background:var(--ink);opacity:.85}
 .coverage .legend b{display:inline-block;width:10px;height:10px;vertical-align:-1px;margin:0 4px 0 12px;background:var(--sev-high)}
+
+/* vulnerability-source status strip */
+.vstatus{display:flex;flex-wrap:wrap;gap:4px 0;align-items:baseline;margin:14px 0 0;padding:9px 14px;background:var(--panel);border:1px solid var(--rule);border-radius:4px;font-size:13px;color:var(--muted);line-height:1.6}
+.vstatus strong{color:var(--ink);font-weight:600}
+.vstatus .sep{margin:0 8px;color:var(--muted);opacity:.6}
+.vstatus code{color:var(--ink)}
+.vstatus.warn{border-color:var(--warn);background:var(--warn-soft);color:var(--ink)}
+.vstatus.warn .label{color:var(--warn)}
+.vstatus .fix{flex-basis:100%;margin-top:2px}
 
 /* tabs & filters */
 nav.tabs{display:flex;gap:4px;margin:24px 0 16px;border-bottom:1px solid var(--rule)}
@@ -152,6 +163,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px}
   </header>
 
   <section class="verdict" id="verdict"></section>
+  <div class="vstatus" id="vstatus" role="status"></div>
 
   <nav class="tabs" role="tablist" id="tabs">
     <button role="tab" data-tab="matrix" aria-selected="true">Matrix <span class="count" id="c-matrix"></span></button>
@@ -170,6 +182,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px}
         <button data-f="signal" aria-pressed="false">Signals</button>
       </div>
       <select id="type-filter"><option value="">All ecosystems</option></select>
+      <select id="sort" title="Row order"><option value="sev">Sort: severity</option><option value="kev">Sort: KEV / EPSS</option></select>
       <input type="search" id="search" placeholder="Search name or version">
       <div class="spacer"></div>
       <div class="meta" id="matrix-meta"></div>
@@ -186,7 +199,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px}
 
 <script>
 const SEV_RANK={CRITICAL:4,HIGH:3,MEDIUM:2,LOW:1,UNKNOWN:0,"":-1};
-let R=null, tools=[], filter="all", typeF="", q="";
+let R=null, tools=[], filter="all", typeF="", q="", sortBy="sev";
 
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const $=id=>document.getElementById(id);
@@ -201,12 +214,14 @@ async function load(){
 function render(){
   const when=R.finishedAt?new Date(R.finishedAt):null;
   $("target").innerHTML=`<code>${esc(R.target)}</code>${when?` scanned ${when.toLocaleString()}`:""}`;
-  renderVerdict(); renderMatrix(); renderPairs(); renderBlind(); renderTools();
+  // With VDB data, exploited-in-the-wild advisories outrank raw severity by default.
+  if(R.vuln&&R.vuln.source==="vdb"){sortBy="kev";$("sort").value="kev";}
+  renderVerdict(); renderVStatus(); renderMatrix(); renderPairs(); renderBlind(); renderTools();
   $("c-matrix").textContent=R.rows.length;
   $("c-pairs").textContent=(R.pairs||[]).length;
   $("c-blind").textContent=(R.mcpServers||[]).length+R.rows.filter(r=>r.signals&&r.signals.length).length;
   $("c-tools").textContent=(R.generators||[]).length;
-  $("foot").textContent=`${R.tool||"sbomcmp"} · result schema ${R.schemaVersion}. Vulnerability source: ${R.vuln.source}${R.vuln.anonymous?" (anonymous)":""}${R.vuln.endpoint?" ("+R.vuln.endpoint+")":""}${R.vuln.error?" — "+R.vuln.error:""}${R.vuln.note?" — "+R.vuln.note:""}.`;
+  $("foot").textContent=`${R.tool||"sbomcmp"} · result schema ${R.schemaVersion}. Vulnerability source: ${R.vuln.source}${R.vuln.endpoint?" ("+R.vuln.endpoint+")":""}.`;
   const sel=$("type-filter");
   const types=[...new Set(R.rows.map(r=>r.type))].sort();
   for(const t of types){const o=document.createElement("option");o.value=t;o.textContent=t;sel.appendChild(o);}
@@ -236,6 +251,44 @@ function renderVerdict(){
   $("verdict").innerHTML=h;
 }
 
+const maxEPSS=r=>Math.max(0,...(r.vulns||[]).map(v=>v.epss||0));
+const hasKEV=r=>(r.vulns||[]).some(v=>v.kev);
+
+function renderVStatus(){
+  const v=R.vuln||{}, el=$("vstatus"), src=v.source||"none";
+  const sep=`<span class="sep">·</span>`;
+  el.className="vstatus";
+  if(src==="none"){el.innerHTML=`<span class="label"><strong>Vulnerability data:</strong> none (disabled)</span>${sep}<span>scores reflect coverage only</span>`;return;}
+  if(!v.enabled){
+    el.className="vstatus warn";
+    el.innerHTML=`<span class="label"><strong>Vulnerability data:</strong> ${esc(src)} — not applied</span>${v.error?`${sep}<span>${esc(v.error)}</span>`:""}${sep}<span>scores reflect coverage only</span>`;
+    return;
+  }
+  const queried=v.queried||0, answered=v.answered??queried, short=answered<queried;
+  let h=`<span class="label"><strong>Vulnerability data:</strong> ${esc(src)}${src==="vdb"?(v.anonymous?" (anonymous)":" (keyed)"):""}</span>`;
+  h+=`${sep}<span>answered <strong>${answered}</strong> of ${queried}</span>`;
+  if(v.detailsCapped)h+=`${sep}<span><strong>${v.detailsCapped}</strong> advisories unscored (OSV detail cap), shown as UNKNOWN</span>`;
+  if(src==="vdb"||v.vdbExtras){
+    const kev=R.rows.filter(hasKEV).length;
+    const epss=R.rows.filter(r=>maxEPSS(r)>=0.1).length;
+    const slop=R.rows.filter(r=>(r.signals||[]).some(s=>s.kind==="slopsquat")).length;
+    const mcp=(R.mcpServers||[]).filter(m=>m.registry&&m.registry.trustTier!=="unverified").length;
+    const parts=[];
+    const n=(c,w)=>`<strong>${c}</strong> ${w}${c===1?"":"s"}`;
+    if(kev)parts.push(n(kev,"KEV row"));
+    if(epss)parts.push(n(epss,"row")+" with EPSS ≥ 10%");
+    if(slop)parts.push(n(slop,"slopsquat signal"));
+    if(mcp)parts.push(n(mcp,"MCP registry hit"));
+    h+=`${sep}<span>${parts.length?"VDB added: "+parts.join(", "):"no VDB-only signals in this project"}</span>`;
+  }
+  if(short){
+    el.className="vstatus warn";
+    if(src==="vdb"&&v.anonymous)h+=`<span class="fix">The anonymous quota ran out after ${answered} rows; the remaining ${queried-answered} were not checked. Fix: <code>export VDB_API_KEY=…</code> (free at <a href="https://vdb.ai.kr/signup" target="_blank" rel="noopener">vdb.ai.kr/signup</a>) and re-run the scan.</span>`;
+    else h+=`<span class="fix">The remaining ${queried-answered} rows were not checked${v.error?": "+esc(v.error):""}.</span>`;
+  }else if(v.error)h+=`${sep}<span>${esc(v.error)}</span>`;
+  el.innerHTML=h;
+}
+
 function rowsFiltered(){
   const ql=q.toLowerCase();
   return R.rows.filter(r=>{
@@ -247,6 +300,12 @@ function rowsFiltered(){
     if(ql&&!(r.key.toLowerCase().includes(ql)))return false;
     return true;
   }).sort((a,b)=>{
+    if(sortBy==="kev"){
+      const ka=hasKEV(a),kb=hasKEV(b);
+      if(ka!==kb)return ka?-1:1;
+      const ea=maxEPSS(a),eb=maxEPSS(b);
+      if(ea!==eb)return eb-ea;
+    }
     const sa=SEV_RANK[a.maxSeverity||""],sb=SEV_RANK[b.maxSeverity||""];
     if(sa!==sb)return sb-sa;
     if(a.agreement!==b.agreement)return a.agreement==="all"?1:b.agreement==="all"?-1:0;
@@ -274,7 +333,7 @@ function renderMatrix(){
       }
     }
     h+=`<td class="vul">`;
-    if(sev)h+=`<span class="pill sev-${esc(sev)}">${esc(sev)}</span> ${r.vulnTotal&&r.vulnTotal>(r.vulns||[]).length?r.vulnTotal:(r.vulns||[]).length}${(r.vulns||[]).some(v=>v.kev)?' <span class="pill sig refuse" title="CISA Known Exploited Vulnerabilities">KEV</span>':''}`;
+    if(sev)h+=`<span class="pill sev-${esc(sev)}">${esc(sev)}</span> ${r.vulnTotal&&r.vulnTotal>(r.vulns||[]).length?r.vulnTotal:(r.vulns||[]).length}${hasKEV(r)?' <span class="pill sig refuse" title="CISA Known Exploited Vulnerabilities">KEV</span>':''}${maxEPSS(r)>0?` <span class="ok" title="EPSS: probability of exploitation in the next 30 days">EPSS ${(maxEPSS(r)*100).toFixed(1)}%</span>`:''}`;
     for(const s of r.signals||[])h+=` <span class="pill sig ${esc(s.level)}">${esc(s.kind)}</span>`;
     h+=`</td><td class="why">${esc((r.reasons||[]).map(x=>x.split(":")[0]).filter((v,i,a)=>a.indexOf(v)===i).join(", "))}</td></tr>`;
   }
@@ -378,6 +437,7 @@ $("filter-group").addEventListener("click",e=>{
   renderMatrix();
 });
 $("type-filter").addEventListener("change",e=>{typeF=e.target.value;renderMatrix();});
+$("sort").addEventListener("change",e=>{sortBy=e.target.value;renderMatrix();});
 $("search").addEventListener("input",e=>{q=e.target.value;renderMatrix();});
 $("matrix-wrap").addEventListener("click",e=>toggle(e.target.closest("tr.row")));
 $("matrix-wrap").addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){const tr=e.target.closest("tr.row");if(tr){e.preventDefault();toggle(tr);}}});
