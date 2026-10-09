@@ -23,6 +23,12 @@ Recommendation: cdxgen + syft
 
 Then `sbomcmp ui` opens the matrix in your browser, and `sbomcmp report` prints Markdown for a PR comment.
 
+![Verdict: which tool to use, with evidence and per-tool coverage bars](docs/viewer-verdict.png)
+
+![Matrix: one row per component, one dot per tool, risk and the reason tools disagree](docs/viewer-matrix.png)
+
+The verdict panel states the recommendation and the evidence behind it. The matrix shows every component, which tools found it (a hollow dot means that tool reported a different version), the highest known severity, and a one-word reason for each disagreement. Filters narrow it to disagreements, single-tool findings, vulnerable rows or registry signals.
+
 ## Why
 
 Different generators produce different SBOMs for the same code, and that is not a bug. They read different inputs (manifest vs lockfile vs filesystem), apply different scope policies (dev, optional, transitive), cover different ecosystems, and emit identifiers in slightly different shapes. Today, deciding which tool to standardize on means running them by hand and eyeballing counts.
