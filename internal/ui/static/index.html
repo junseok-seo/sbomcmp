@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sbomcmp</title>
+<style>
+:root{
+  --bg:#EEF0F3; --panel:#FFFFFF; --ink:#15181D; --muted:#5B6470; --rule:#D3D7DE; --rule-soft:#E6E9EE;
+  --accent:#1F4FD8; --accent-soft:#E4EAFB;
+  --sev-low:#B8921F; --sev-med:#D97A1F; --sev-high:#C2452B; --sev-crit:#7A1E2B; --sev-unk:#8A93A0;
+  --signal:#6B3FA0; --signal-soft:#EFE8F7;
+  --dot:#15181D; --dot-empty:#C9CED6;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:"IBM Plex Sans","Source Sans 3","Segoe UI",system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#15181D; --panel:#1D2127; --ink:#ECEEF1; --muted:#9AA3AF; --rule:#343A43; --rule-soft:#282D35;
+    --accent:#7C9BFF; --accent-soft:#232C44; --dot:#ECEEF1; --dot-empty:#3B424C;
+    --signal:#B392E8; --signal-soft:#2B2338; --sev-unk:#6F7884;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans)}
+a{color:var(--accent)}
+code,.mono{font-family:var(--mono);font-size:.86em}
+button{font:inherit;color:inherit;background:none;border:1px solid var(--rule);border-radius:4px;padding:4px 10px;cursor:pointer}
+button:hover{border-color:var(--ink)}
+button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+button:focus-visible,input:focus-visible,select:focus-visible,tr:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input,select{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--rule);border-radius:4px;padding:4px 8px}
+
+.page{max-width:1240px;margin:0 auto;padding:28px 24px 80px}
+@media (max-width:640px){.page{padding:16px 16px 60px}}
+
+header.top{display:flex;justify-content:space-between;align-items:baseline;gap:16px;flex-wrap:wrap;margin-bottom:28px}
+header.top .brand{font-weight:600;letter-spacing:-.01em}
+header.top .target{color:var(--muted)}
+header.top .target code{color:var(--ink)}
+
+/* verdict */
+.verdict{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(280px,1fr);gap:40px;align-items:start;padding-bottom:28px;border-bottom:1px solid var(--rule)}
+@media (max-width:900px){.verdict{grid-template-columns:1fr;gap:24px}}
+.verdict h1{font-size:clamp(28px,4vw,40px);line-height:1.1;font-weight:600;letter-spacing:-.02em;margin:0 0 14px}
+.verdict h1 .tool{text-decoration:underline;text-decoration-thickness:3px;text-underline-offset:6px;text-decoration-color:var(--accent)}
+.verdict ul{margin:0;padding:0;list-style:none;max-width:62ch}
+.verdict li{padding:5px 0 5px 20px;position:relative}
+.verdict li::before{content:"";position:absolute;left:0;top:14px;width:9px;height:9px;border-radius:50%;background:var(--dot)}
+.verdict li.caveat::before{background:none;border:2px solid var(--sev-med);width:7px;height:7px;top:13px}
+.verdict .empty{color:var(--muted)}
+
+.coverage{display:grid;gap:10px;align-self:center}
+.coverage .row{display:grid;grid-template-columns:84px 1fr auto;gap:12px;align-items:center}
+.coverage .name{font-weight:600}
+.coverage .bar{height:18px;background:var(--rule-soft);position:relative;border-radius:2px;overflow:hidden}
+.coverage .bar i{position:absolute;inset:0 auto 0 0;background:var(--ink);opacity:.85}
+.coverage .bar b{position:absolute;inset:0 auto 0 0;background:var(--sev-high);width:0}
+.coverage .n{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
+.coverage .n strong{color:var(--ink)}
+.coverage .legend{color:var(--muted);font-size:13px;margin-top:4px}
+.coverage .legend i{display:inline-block;width:10px;height:10px;vertical-align:-1px;margin-right:4px;background:var(--ink);opacity:.85}
+.coverage .legend b{display:inline-block;width:10px;height:10px;vertical-align:-1px;margin:0 4px 0 12px;background:var(--sev-high)}
+
+/* tabs & filters */
+nav.tabs{display:flex;gap:4px;margin:24px 0 16px;border-bottom:1px solid var(--rule)}
+nav.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;padding:8px 12px;margin-bottom:-1px;color:var(--muted)}
+nav.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
+nav.tabs button .count{color:var(--muted);margin-left:6px;font-variant-numeric:tabular-nums}
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.filters .group{display:flex;gap:4px}
+.filters input[type=search]{min-width:220px}
+.filters .spacer{flex:1}
+.filters .meta{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+
+/* matrix */
+.matrix{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--rule)}
+.matrix th,.matrix td{padding:7px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--rule-soft)}
+.matrix thead th{position:sticky;top:0;background:var(--panel);font-weight:600;border-bottom:1px solid var(--rule);z-index:1;white-space:nowrap}
+.matrix th.tool,.matrix td.tool{text-align:center;width:72px}
+.matrix td.sev{width:16px;padding:0}
+.matrix td.sev i{display:block;width:4px;height:100%;min-height:30px;background:var(--sev-unk)}
+.matrix tr[data-sev=CRITICAL] td.sev i{background:var(--sev-crit)}
+.matrix tr[data-sev=HIGH] td.sev i{background:var(--sev-high)}
+.matrix tr[data-sev=MEDIUM] td.sev i{background:var(--sev-med)}
+.matrix tr[data-sev=LOW] td.sev i{background:var(--sev-low)}
+.matrix tr[data-sev=""] td.sev i{background:transparent}
+.matrix td.key{font-family:var(--mono);font-size:13px;word-break:break-all}
+.matrix td.key .type{color:var(--muted)}
+.matrix td.why{color:var(--muted);font-size:13px;max-width:36ch}
+.matrix td.vul{font-size:13px;white-space:nowrap}
+.matrix tr.row{cursor:pointer}
+.matrix tr.row:hover td{background:var(--accent-soft)}
+.matrix tr.row[aria-expanded="true"] td{background:var(--accent-soft)}
+.dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--dot);vertical-align:-1px}
+.dot.off{background:none;border:1.5px solid var(--dot-empty)}
+.dot.ver{background:none;border:3px solid var(--dot);width:12px;height:12px}
+.pill{display:inline-block;padding:1px 7px;border-radius:3px;font-size:12px;font-weight:600;line-height:1.5}
+.pill.sev-CRITICAL{background:var(--sev-crit);color:#fff}
+.pill.sev-HIGH{background:var(--sev-high);color:#fff}
+.pill.sev-MEDIUM{background:var(--sev-med);color:#fff}
+.pill.sev-LOW{background:var(--sev-low);color:#fff}
+.pill.sev-UNKNOWN{background:var(--sev-unk);color:#fff}
+.pill.sig{background:var(--signal-soft);color:var(--signal)}
+.pill.sig.refuse{background:var(--signal);color:#fff}
+.detail td{background:var(--bg)!important;padding:12px 14px 14px 36px}
+.detail .cells{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px 24px;margin-bottom:10px}
+.detail .cells div{font-size:13px}
+.detail .cells .t{font-weight:600}
+.detail .cells code{display:block;color:var(--muted);word-break:break-all}
+.detail ul{margin:6px 0 0;padding-left:18px;font-size:13px}
+.detail .vul{margin-top:8px;font-size:13px}
+.detail .vul div{padding:3px 0}
+.empty-state{padding:40px;text-align:center;color:var(--muted);background:var(--panel);border:1px solid var(--rule)}
+
+/* pairs */
+.pairs{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.pair{background:var(--panel);border:1px solid var(--rule);padding:14px 16px}
+.pair h3{margin:0 0 8px;font-size:16px;font-weight:600}
+.pair .bars{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px;align-items:center}
+.pair .bars span{color:var(--muted);white-space:nowrap}
+.pair .bars i{display:block;height:12px;background:var(--rule-soft);position:relative}
+.pair .bars i b{position:absolute;inset:0 auto 0 0;background:var(--ink);opacity:.8}
+.pair .bars i.b b{opacity:.45}
+.pair .foot{color:var(--muted);font-size:13px;margin-top:8px}
+.pair details{margin-top:8px;font-size:13px}
+.pair details summary{cursor:pointer;color:var(--accent)}
+.pair details ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-size:12px;max-height:220px;overflow:auto}
+
+/* blind spots & tools */
+.plain{background:var(--panel);border:1px solid var(--rule);padding:16px 18px;max-width:80ch}
+.plain h3{margin:0 0 6px;font-size:16px}
+.plain p{margin:0 0 12px;color:var(--muted)}
+table.simple{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--rule)}
+table.simple th,table.simple td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+table.simple th{font-weight:600;border-bottom:1px solid var(--rule)}
+table.simple td.num{text-align:right;font-variant-numeric:tabular-nums}
+table.simple code{word-break:break-all}
+.err{color:var(--sev-high)}
+.ok{color:var(--muted)}
+footer{margin-top:40px;color:var(--muted);font-size:13px}
+@media (prefers-reduced-motion:no-preference){.detail td{animation:open .12s ease-out}}
+@keyframes open{from{opacity:0}to{opacity:1}}
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <div class="brand">sbomcmp</div>
+    <div class="target" id="target"></div>
+  </header>
+
+  <section class="verdict" id="verdict"></section>
+
+  <nav class="tabs" role="tablist" id="tabs">
+    <button role="tab" data-tab="matrix" aria-selected="true">Matrix <span class="count" id="c-matrix"></span></button>
+    <button role="tab" data-tab="pairs" aria-selected="false">Tool pairs <span class="count" id="c-pairs"></span></button>
+    <button role="tab" data-tab="blind" aria-selected="false">Blind spots <span class="count" id="c-blind"></span></button>
+    <button role="tab" data-tab="tools" aria-selected="false">Runs <span class="count" id="c-tools"></span></button>
+  </nav>
+
+  <section id="tab-matrix" role="tabpanel">
+    <div class="filters">
+      <div class="group" id="filter-group">
+        <button data-f="all" aria-pressed="true">All</button>
+        <button data-f="disagree" aria-pressed="false">Disagreements</button>
+        <button data-f="single" aria-pressed="false">Only one tool</button>
+        <button data-f="vuln" aria-pressed="false">Vulnerable</button>
+        <button data-f="signal" aria-pressed="false">Signals</button>
+      </div>
+      <select id="type-filter"><option value="">All ecosystems</option></select>
+      <input type="search" id="search" placeholder="Search name or version">
+      <div class="spacer"></div>
+      <div class="meta" id="matrix-meta"></div>
+    </div>
+    <div id="matrix-wrap"></div>
+  </section>
+
+  <section id="tab-pairs" role="tabpanel" hidden><div class="pairs" id="pairs"></div></section>
+  <section id="tab-blind" role="tabpanel" hidden><div id="blind"></div></section>
+  <section id="tab-tools" role="tabpanel" hidden><div id="tools"></div></section>
+
+  <footer id="foot"></footer>
+</div>
+
+<script>
+const SEV_RANK={CRITICAL:4,HIGH:3,MEDIUM:2,LOW:1,UNKNOWN:0,"":-1};
+let R=null, tools=[], filter="all", typeF="", q="";
+
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const $=id=>document.getElementById(id);
+
+async function load(){
+  const r=await fetch("/api/result",{cache:"no-store"});
+  R=await r.json();
+  tools=(R.generators||[]).filter(g=>g.available&&!g.error).map(g=>g.name).sort();
+  render();
+}
+
+function render(){
+  const when=R.finishedAt?new Date(R.finishedAt):null;
+  $("target").innerHTML=`<code>${esc(R.target)}</code>${when?` scanned ${when.toLocaleString()}`:""}`;
+  renderVerdict(); renderMatrix(); renderPairs(); renderBlind(); renderTools();
+  $("c-matrix").textContent=R.rows.length;
+  $("c-pairs").textContent=(R.pairs||[]).length;
+  $("c-blind").textContent=(R.mcpServers||[]).length+R.rows.filter(r=>r.signals&&r.signals.length).length;
+  $("c-tools").textContent=(R.generators||[]).length;
+  $("foot").textContent=`${R.tool||"sbomcmp"} · result schema ${R.schemaVersion}. Vulnerability source: ${R.vuln.source}${R.vuln.anonymous?" (anonymous)":""}${R.vuln.endpoint?" ("+R.vuln.endpoint+")":""}${R.vuln.error?" — "+R.vuln.error:""}${R.vuln.note?" — "+R.vuln.note:""}.`;
+  const sel=$("type-filter");
+  const types=[...new Set(R.rows.map(r=>r.type))].sort();
+  for(const t of types){const o=document.createElement("option");o.value=t;o.textContent=t;sel.appendChild(o);}
+}
+
+function renderVerdict(){
+  const rec=R.recommendation||{};
+  let h="";
+  if(rec.primary){
+    h+=`<div><h1>Use <span class="tool">${esc(rec.primary)}</span>.${rec.secondary?` Pair with <span class="tool">${esc(rec.secondary)}</span>.`:""}</h1><ul>`;
+    for(const s of rec.reasons||[])h+=`<li>${esc(s)}</li>`;
+    for(const s of rec.caveats||[])h+=`<li class="caveat">${esc(s)}</li>`;
+    h+=`</ul></div>`;
+  }else{
+    h+=`<div><h1>No usable SBOM.</h1><p class="empty">${esc((rec.reasons||[]).join(" "))}</p></div>`;
+  }
+  h+=`<div class="coverage">`;
+  const union=R.union||1;
+  for(const s of R.summaries||[]){
+    const pct=Math.round(s.coverage*100);
+    const vulnW=union?100*s.uniqueVuln/union:0;
+    h+=`<div class="row"><span class="name">${esc(s.name)}</span>
+      <span class="bar" title="${pct}% of union"><i style="width:${pct}%"></i><b style="width:${vulnW}%;left:${pct-vulnW}%"></b></span>
+      <span class="n"><strong>${s.total}</strong> / ${union}${s.unique?` · ${s.unique} only here`:""}</span></div>`;
+  }
+  h+=`<div class="legend"><i></i>found by this tool<b></b>found only here and vulnerable</div></div>`;
+  $("verdict").innerHTML=h;
+}
+
+function rowsFiltered(){
+  const ql=q.toLowerCase();
+  return R.rows.filter(r=>{
+    if(filter==="disagree"&&r.agreement==="all")return false;
+    if(filter==="single"&&r.agreement!=="single")return false;
+    if(filter==="vuln"&&!(r.vulns&&r.vulns.length))return false;
+    if(filter==="signal"&&!(r.signals&&r.signals.length))return false;
+    if(typeF&&r.type!==typeF)return false;
+    if(ql&&!(r.key.toLowerCase().includes(ql)))return false;
+    return true;
+  }).sort((a,b)=>{
+    const sa=SEV_RANK[a.maxSeverity||""],sb=SEV_RANK[b.maxSeverity||""];
+    if(sa!==sb)return sb-sa;
+    if(a.agreement!==b.agreement)return a.agreement==="all"?1:b.agreement==="all"?-1:0;
+    return a.key<b.key?-1:1;
+  });
+}
+
+function renderMatrix(){
+  const rows=rowsFiltered();
+  $("matrix-meta").textContent=`${rows.length} of ${R.rows.length}`;
+  if(!rows.length){$("matrix-wrap").innerHTML=`<div class="empty-state">Nothing matches. Clear a filter or widen the search.</div>`;return;}
+  let h=`<table class="matrix"><thead><tr><th></th><th>Component</th>`;
+  for(const t of tools)h+=`<th class="tool">${esc(t)}</th>`;
+  h+=`<th>Risk</th><th>Why tools disagree</th></tr></thead><tbody>`;
+  for(const r of rows){
+    const sev=r.maxSeverity||"";
+    h+=`<tr class="row" tabindex="0" data-key="${esc(r.key)}" data-sev="${esc(sev)}" aria-expanded="false"><td class="sev"><i></i></td>`;
+    h+=`<td class="key"><span class="type">${esc(r.type)}/</span>${esc((r.namespace?r.namespace+"/":"")+r.name)}<span class="type">@</span>${esc(r.version)}</td>`;
+    for(const t of tools){
+      const c=r.cells[t]||{};
+      if(c.found)h+=`<td class="tool"><span class="dot" title="${esc(t)}: ${esc(c.purl||c.version)}"></span></td>`;
+      else{
+        const vm=(r.reasons||[]).find(x=>x.startsWith("version-mismatch: "+t));
+        h+=`<td class="tool"><span class="dot ${vm?"ver":"off"}" title="${esc(vm||t+": not found")}"></span></td>`;
+      }
+    }
+    h+=`<td class="vul">`;
+    if(sev)h+=`<span class="pill sev-${esc(sev)}">${esc(sev)}</span> ${r.vulnTotal&&r.vulnTotal>(r.vulns||[]).length?r.vulnTotal:(r.vulns||[]).length}${(r.vulns||[]).some(v=>v.kev)?' <span class="pill sig refuse" title="CISA Known Exploited Vulnerabilities">KEV</span>':''}`;
+    for(const s of r.signals||[])h+=` <span class="pill sig ${esc(s.level)}">${esc(s.kind)}</span>`;
+    h+=`</td><td class="why">${esc((r.reasons||[]).map(x=>x.split(":")[0]).filter((v,i,a)=>a.indexOf(v)===i).join(", "))}</td></tr>`;
+  }
+  h+=`</tbody></table>`;
+  $("matrix-wrap").innerHTML=h;
+}
+
+function detailRow(r){
+  let h=`<tr class="detail"><td colspan="${tools.length+4}"><div class="cells">`;
+  for(const t of tools){
+    const c=r.cells[t]||{};
+    h+=`<div><span class="t">${esc(t)}</span> ${c.found?"":"<span class='ok'>not found</span>"}<code>${esc(c.purl||"")}${c.scope?"  scope="+esc(c.scope):""}</code></div>`;
+  }
+  h+=`</div>`;
+  if(r.reasons&&r.reasons.length){h+=`<ul>`;for(const x of r.reasons)h+=`<li>${esc(x)}</li>`;h+=`</ul>`;}
+  if(r.vulns&&r.vulns.length){
+    h+=`<div class="vul">`;
+    for(const v of r.vulns){
+      h+=`<div><span class="pill sev-${esc(v.severity||"UNKNOWN")}">${esc(v.severity||"UNKNOWN")}</span>${v.score?` <span class="ok">${v.score.toFixed(1)}</span>`:""} <code>${esc(v.id)}</code>${v.kev?' <span class="pill sig refuse">KEV</span>':''}${v.epss?` <span class="ok">EPSS ${(v.epss*100).toFixed(1)}%</span>`:''}${v.aliases&&v.aliases.length?` <span class="ok">${esc(v.aliases.join(", "))}</span>`:""}${v.fixed?` · fixed in ${esc(v.fixed)}`:""}${v.summary?`<br><span class="ok">${esc(v.summary)}</span>`:""} <span class="ok">(${esc(v.source)})</span></div>`;
+    }
+    if(r.vulnTotal&&r.vulnTotal>r.vulns.length)h+=`<div class="ok">+${r.vulnTotal-r.vulns.length} more advisories not listed by the source</div>`;
+    h+=`</div>`;
+  }
+  if(r.signals&&r.signals.length){
+    h+=`<div class="vul">`;
+    for(const s of r.signals)h+=`<div><span class="pill sig ${esc(s.level)}">${esc(s.kind)}</span> ${esc(s.message)} <span class="ok">(${esc(s.source)})</span></div>`;
+    h+=`</div>`;
+  }
+  h+=`</td></tr>`;
+  return h;
+}
+
+function renderPairs(){
+  let h="";
+  for(const p0 of R.pairs||[]){
+    const p={...p0,onlyA:p0.onlyA||[],onlyB:p0.onlyB||[],versionDisagree:p0.versionDisagree||[]};
+    const max=Math.max(p.both,p.onlyA.length,p.onlyB.length,1);
+    const w=n=>Math.round(100*n/max);
+    h+=`<div class="pair"><h3>${esc(p.a)} vs ${esc(p.b)}</h3><div class="bars">
+      <span>both</span><i><b style="width:${w(p.both)}%"></b></i>
+      <span>only ${esc(p.a)}</span><i class="b"><b style="width:${w(p.onlyA.length)}%"></b></i>
+      <span>only ${esc(p.b)}</span><i class="b"><b style="width:${w(p.onlyB.length)}%"></b></i></div>
+      <div class="foot">${p.both} shared · ${p.onlyA.length} / ${p.onlyB.length} exclusive · Jaccard ${p.jaccard.toFixed(2)}${p.versionDisagree.length?` · ${p.versionDisagree.length} version disagreements`:""}</div>`;
+    if(p.onlyA.length)h+=`<details><summary>Only ${esc(p.a)} (${p.onlyA.length})</summary><ul>${p.onlyA.map(k=>`<li>${esc(k)}</li>`).join("")}</ul></details>`;
+    if(p.onlyB.length)h+=`<details><summary>Only ${esc(p.b)} (${p.onlyB.length})</summary><ul>${p.onlyB.map(k=>`<li>${esc(k)}</li>`).join("")}</ul></details>`;
+    if(p.versionDisagree.length)h+=`<details><summary>Version disagreements (${p.versionDisagree.length})</summary><ul>${p.versionDisagree.map(k=>`<li>${esc(k)}</li>`).join("")}</ul></details>`;
+    h+=`</div>`;
+  }
+  $("pairs").innerHTML=h||`<div class="empty-state">Fewer than two generators ran, so there is nothing to pair.</div>`;
+}
+
+function renderBlind(){
+  const mcp=R.mcpServers||[];
+  const sig=R.rows.filter(r=>r.signals&&r.signals.length);
+  let h=`<div class="plain"><h3>What no generator reports</h3><p>MCP servers configured in this project are code the agent runs, but none of the SBOM tools list them. ${R.vuln.vdbExtras?"The Registry column and the vdb-sourced signals come from VDB's MCP registry and live registry probes.":"Run with <code>--vuln-source vdb</code> (or set <code>VDB_API_KEY</code>) to check these packages against VDB's MCP registry: trust tier, declared scopes, recent scope changes."}</p></div>`;
+  if(mcp.length){
+    h+=`<table class="simple" style="margin-top:16px"><thead><tr><th>MCP server</th><th>Config file</th><th>Runs</th><th>Registry</th><th>Signals</th></tr></thead><tbody>`;
+    for(const m of mcp){
+      const run=m.url||[m.command,...(m.args||[])].join(" ");
+      let reg=`<span class="ok">—</span>`;
+      if(m.registry){
+        const r=m.registry;
+        reg=`<span class="pill sig ${r.trustTier==="unverified"?"refuse":""}">${esc(r.trustTier)}</span>${r.displayName?` ${esc(r.displayName)}`:""}${r.scopes&&r.scopes.length?`<br><code>${esc(r.scopes.join(" "))}</code>`:""}${r.riskScore?`<br><span class="ok">risk ${r.riskScore.toFixed(2)}</span>`:""}${r.scopeDrift?`<br><span class="pill sig">scope drift</span> <code>${esc(r.scopeDrift)}</code>`:""}${r.riskNotes?`<br><span class="ok">${esc(r.riskNotes)}</span>`:""}`;
+      }else if(m.package){
+        reg=`<span class="ok">not checked</span><br><code>${esc(m.package)}</code>`;
+      }
+      h+=`<tr><td>${esc(m.name)}</td><td><code>${esc(m.source)}</code></td><td><code>${esc(run)}</code></td><td>${reg}</td><td>${(m.signals||[]).map(s=>`<span class="pill sig ${esc(s.level)}">${esc(s.kind)}</span> ${esc(s.message)} <span class="ok">(${esc(s.source)})</span>`).join("<br>")}</td></tr>`;
+    }
+    h+=`</tbody></table>`;
+  }
+  if(sig.length){
+    h+=`<table class="simple" style="margin-top:16px"><thead><tr><th>Component</th><th>Found by</th><th>Signal</th></tr></thead><tbody>`;
+    for(const r of sig)h+=`<tr><td><code>${esc(r.key)}</code></td><td>${esc((r.foundBy||[]).join(", "))}</td><td>${r.signals.map(s=>`<span class="pill sig ${esc(s.level)}">${esc(s.kind)}</span> ${esc(s.message)}`).join("<br>")}</td></tr>`;
+    h+=`</tbody></table>`;
+  }
+  if(!mcp.length&&!sig.length)h+=`<div class="empty-state" style="margin-top:16px">No MCP configuration found and no registry signals returned.</div>`;
+  $("blind").innerHTML=h;
+}
+
+function renderTools(){
+  let h=`<table class="simple"><thead><tr><th>Generator</th><th>Version</th><th class="num">Components</th><th>Ecosystems</th><th class="num">Time</th><th>Command / status</th></tr></thead><tbody>`;
+  for(const g of R.generators||[]){
+    const types=Object.entries(g.types||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${esc(k)} ${v}`).join(", ");
+    const count=g.available&&!g.error?`${g.count}${g.skipped?` <span class="ok" title="version-less entries not comparable">(+${g.skipped} skipped)</span>`:""}`:"—";
+    h+=`<tr><td>${esc(g.name)}${g.format?`<br><span class="ok">${esc(g.format)}</span>`:""}</td><td>${esc(g.version||"—")}</td><td class="num">${count}</td><td>${types||"—"}</td><td class="num">${g.durationMs?g.durationMs+" ms":"—"}</td><td>${g.error?`<span class="err">${esc(g.error)}</span>`:`<code>${esc((g.command||[]).join(" "))}</code>${g.rawPath?` <a href="/api/raw/${esc(g.name)}" target="_blank">raw</a>`:""}`}</td></tr>`;
+  }
+  h+=`</tbody></table>`;
+  $("tools").innerHTML=h;
+}
+
+// interactions
+$("tabs").addEventListener("click",e=>{
+  const b=e.target.closest("button[role=tab]");if(!b)return;
+  for(const t of $("tabs").querySelectorAll("button"))t.setAttribute("aria-selected",t===b);
+  for(const s of document.querySelectorAll("[role=tabpanel]"))s.hidden=s.id!=="tab-"+b.dataset.tab;
+});
+$("filter-group").addEventListener("click",e=>{
+  const b=e.target.closest("button");if(!b)return;
+  filter=b.dataset.f;
+  for(const x of $("filter-group").querySelectorAll("button"))x.setAttribute("aria-pressed",x===b);
+  renderMatrix();
+});
+$("type-filter").addEventListener("change",e=>{typeF=e.target.value;renderMatrix();});
+$("search").addEventListener("input",e=>{q=e.target.value;renderMatrix();});
+$("matrix-wrap").addEventListener("click",e=>toggle(e.target.closest("tr.row")));
+$("matrix-wrap").addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){const tr=e.target.closest("tr.row");if(tr){e.preventDefault();toggle(tr);}}});
+function toggle(tr){
+  if(!tr)return;
+  const open=tr.getAttribute("aria-expanded")==="true";
+  const next=tr.nextElementSibling;
+  if(open){tr.setAttribute("aria-expanded","false");if(next&&next.classList.contains("detail"))next.remove();return;}
+  const r=R.rows.find(x=>x.key===tr.dataset.key);
+  tr.setAttribute("aria-expanded","true");
+  tr.insertAdjacentHTML("afterend",detailRow(r));
+}
+load().catch(e=>{$("verdict").innerHTML=`<div><h1>Could not load the result.</h1><p class="empty">${esc(e.message)}. Run <code>sbomcmp scan</code> first, then <code>sbomcmp ui</code>.</p></div>`;});
+</script>
+</body>
+</html>

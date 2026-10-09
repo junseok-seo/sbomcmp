@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Mock syft: mirrors real syft 1.x CycloneDX output shape and its known quirks:
+#  - lists manifest deps without scope markers (dev deps look like prod deps)
+#  - PyPI names as written in requirements.txt (Flask_Login)
+#  - Go purls keep the "v" prefix, qualifiers attached
+#  - no transitive resolution without a lockfile
+export MOCK_VERSION="1.19.0"
+. "$(dirname "$0")/_emit.sh" "$@"
+cat > "$out" <<'JSON'
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "metadata": { "tools": { "components": [ { "type": "application", "name": "syft", "version": "1.19.0" } ] } },
+  "components": [
+    { "type": "library", "name": "express", "version": "4.19.2", "purl": "pkg:npm/express@4.19.2",
+      "properties": [ { "name": "syft:package:foundBy", "value": "javascript-package-cataloger" }, { "name": "syft:location:0:path", "value": "/package.json" } ] },
+    { "type": "library", "name": "lodash", "version": "4.17.21", "purl": "pkg:npm/lodash@4.17.21",
+      "properties": [ { "name": "syft:package:foundBy", "value": "javascript-package-cataloger" } ] },
+    { "type": "library", "group": "@babel", "name": "runtime", "version": "7.24.0", "purl": "pkg:npm/%40babel/runtime@7.24.0",
+      "properties": [ { "name": "syft:package:foundBy", "value": "javascript-package-cataloger" } ] },
+    { "type": "library", "name": "axios", "version": "1.6.0", "purl": "pkg:npm/axios@1.6.0",
+      "properties": [ { "name": "syft:package:foundBy", "value": "javascript-package-cataloger" } ] },
+    { "type": "library", "name": "requests-toolkit-pro", "version": "1.2.0", "purl": "pkg:npm/requests-toolkit-pro@1.2.0",
+      "properties": [ { "name": "syft:package:foundBy", "value": "javascript-package-cataloger" } ] },
+    { "type": "library", "name": "jest", "version": "29.7.0", "purl": "pkg:npm/jest@29.7.0",
+      "properties": [ { "name": "syft:package:foundBy", "value": "javascript-package-cataloger" } ] },
+    { "type": "library", "name": "eslint", "version": "8.57.0", "purl": "pkg:npm/eslint@8.57.0",
+      "properties": [ { "name": "syft:package:foundBy", "value": "javascript-package-cataloger" } ] },
+
+    { "type": "library", "name": "Flask", "version": "3.0.2", "purl": "pkg:pypi/Flask@3.0.2",
+      "properties": [ { "name": "syft:package:foundBy", "value": "python-package-cataloger" } ] },
+    { "type": "library", "name": "requests", "version": "2.31.0", "purl": "pkg:pypi/requests@2.31.0",
+      "properties": [ { "name": "syft:package:foundBy", "value": "python-package-cataloger" } ] },
+    { "type": "library", "name": "PyYAML", "version": "6.0.1", "purl": "pkg:pypi/PyYAML@6.0.1",
+      "properties": [ { "name": "syft:package:foundBy", "value": "python-package-cataloger" } ] },
+    { "type": "library", "name": "Flask_Login", "version": "0.6.3", "purl": "pkg:pypi/Flask_Login@0.6.3",
+      "properties": [ { "name": "syft:package:foundBy", "value": "python-package-cataloger" } ] },
+    { "type": "library", "name": "cryptography", "version": "42.0.0", "purl": "pkg:pypi/cryptography@42.0.0",
+      "properties": [ { "name": "syft:package:foundBy", "value": "python-package-cataloger" } ] },
+
+    { "type": "library", "name": "github.com/gorilla/mux", "version": "v1.8.1", "purl": "pkg:golang/github.com/gorilla/mux@v1.8.1?type=module",
+      "properties": [ { "name": "syft:package:foundBy", "value": "go-module-file-cataloger" } ] },
+    { "type": "library", "name": "golang.org/x/crypto", "version": "v0.17.0", "purl": "pkg:golang/golang.org/x/crypto@v0.17.0?type=module",
+      "properties": [ { "name": "syft:package:foundBy", "value": "go-module-file-cataloger" } ] },
+    { "type": "library", "name": "github.com/gin-gonic/gin", "version": "v1.9.1", "purl": "pkg:golang/github.com/gin-gonic/gin@v1.9.1?type=module",
+      "properties": [ { "name": "syft:package:foundBy", "value": "go-module-file-cataloger" } ] }
+  ]
+}
+JSON

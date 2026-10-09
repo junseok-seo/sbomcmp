@@ -1,0 +1,142 @@
+{
+  "_comment": "Offline stand-in for OSV/VDB. Keys are the purls sbomcmp queries (pkg:golang/... with the v prefix). IDs are real advisories for these versions; severities bucketed. 'mcp' is keyed by the MCP server's launcher package purl.",
+  "vulns": {
+    "pkg:npm/qs@6.11.0": [
+      {
+        "id": "GHSA-hrpp-h998-j3pp",
+        "aliases": [
+          "CVE-2022-24999"
+        ],
+        "severity": "HIGH",
+        "score": 7.5,
+        "fixed": "6.11.1",
+        "summary": "qs vulnerable to prototype pollution via __proto__ in query string"
+      }
+    ],
+    "pkg:npm/follow-redirects@1.15.3": [
+      {
+        "id": "GHSA-jchw-25xp-jwwc",
+        "aliases": [
+          "CVE-2023-26159"
+        ],
+        "severity": "MEDIUM",
+        "score": 6.1,
+        "fixed": "1.15.4",
+        "summary": "Improper input validation in follow-redirects URL handling"
+      }
+    ],
+    "pkg:npm/axios@1.6.0": [
+      {
+        "id": "GHSA-wf5p-g6vw-rhxx",
+        "aliases": [
+          "CVE-2023-45857"
+        ],
+        "severity": "MEDIUM",
+        "score": 6.5,
+        "fixed": "1.6.1",
+        "summary": "Axios cross-site request forgery vulnerability (XSRF-TOKEN leak)"
+      }
+    ],
+    "pkg:pypi/werkzeug@3.0.1": [
+      {
+        "id": "GHSA-2g68-c3qc-8985",
+        "aliases": [
+          "CVE-2024-34069"
+        ],
+        "severity": "HIGH",
+        "score": 7.5,
+        "fixed": "3.0.3",
+        "summary": "Werkzeug debugger vulnerable to remote execution when interacting with attacker controlled domain"
+      }
+    ],
+    "pkg:pypi/jinja2@3.1.3": [
+      {
+        "id": "GHSA-h75v-3vvj-5mfj",
+        "aliases": [
+          "CVE-2024-34064"
+        ],
+        "severity": "MEDIUM",
+        "score": 5.4,
+        "fixed": "3.1.4",
+        "summary": "Jinja xmlattr filter accepts keys with non-attribute characters"
+      }
+    ],
+    "pkg:golang/golang.org/x/net@v0.10.0": [
+      {
+        "id": "GHSA-4374-p667-p6c8",
+        "aliases": [
+          "CVE-2023-39325"
+        ],
+        "severity": "HIGH",
+        "score": 7.5,
+        "fixed": "0.17.0",
+        "summary": "HTTP/2 rapid reset can cause excessive work in net/http"
+      },
+      {
+        "id": "GHSA-2wrh-6pvc-2jm9",
+        "aliases": [
+          "CVE-2023-3978"
+        ],
+        "severity": "MEDIUM",
+        "score": 6.1,
+        "fixed": "0.13.0",
+        "summary": "Improper rendering of text nodes in golang.org/x/net/html"
+      }
+    ],
+    "pkg:golang/golang.org/x/crypto@v0.17.0": [
+      {
+        "id": "GHSA-45x7-px36-x8w8",
+        "aliases": [
+          "CVE-2023-48795"
+        ],
+        "severity": "MEDIUM",
+        "score": 5.9,
+        "fixed": "0.17.0",
+        "summary": "Terrapin prefix truncation in SSH (fixed in this version; listed for demo)"
+      }
+    ]
+  },
+  "signals": {
+    "pkg:npm/requests-toolkit-pro@1.2.0": [
+      {
+        "kind": "slopsquat",
+        "level": "refuse",
+        "source": "vdb",
+        "message": "no such name on the npm registry; nearest real package is 'requests-toolkit'. Names like this get registered by squatters"
+      }
+    ]
+  },
+  "mcp": {
+    "pkg:npm/%40modelcontextprotocol/server-filesystem": {
+      "id": "mcp:anthropic/filesystem",
+      "displayName": "Filesystem (Anthropic)",
+      "trustTier": "official",
+      "scopes": [
+        "fs:read",
+        "fs:write"
+      ],
+      "riskScore": 0.12,
+      "riskNotes": "Can write to the host filesystem.",
+      "source": "fixture"
+    },
+    "pkg:npm/github-mcp-server": {
+      "id": "pkg:npm/github-mcp-server",
+      "trustTier": "unverified",
+      "riskNotes": "not in the MCP registry",
+      "source": "fixture"
+    },
+    "pkg:pypi/mcp-server-browser": {
+      "id": "mcp:community/browser",
+      "displayName": "Browser",
+      "trustTier": "community",
+      "scopes": [
+        "net:outbound",
+        "exec"
+      ],
+      "riskScore": 0.74,
+      "riskNotes": "Executes a headless browser; exec scope added 2026-09.",
+      "scopeDrift": "+exec (2026-09-12)",
+      "source": "fixture"
+    }
+  }
+}

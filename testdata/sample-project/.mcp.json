@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/projects"] },
+    "github": { "command": "npx", "args": ["-y", "github-mcp-server"] },
+    "internal-tools": { "url": "http://tools.internal:8080/mcp" }
+  }
+}

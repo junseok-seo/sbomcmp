@@ -1,0 +1,6 @@
+/sbomcmp
+/sbomcmp.json
+/sbomcmp.raw/
+/dist/
+/.claude/
+.DS_Store

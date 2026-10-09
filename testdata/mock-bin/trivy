@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Mock trivy: mirrors trivy fs --format cyclonedx behaviour:
+#  - npm: requires package-lock.json; none here → zero npm components
+#  - pypi: direct deps from requirements.txt, names as written
+#  - golang: go.mod direct deps only, "v" prefix kept
+#  - one version drift (PyYAML 6.0 vs 6.0.1) to exercise version-mismatch
+#  - component type "operating-system" root + aquasecurity:trivy:PkgType properties
+export MOCK_VERSION="0.58.1"
+. "$(dirname "$0")/_emit.sh" "$@"
+cat > "$out" <<'JSON'
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "metadata": { "tools": { "components": [ { "type": "application", "group": "aquasecurity", "name": "trivy", "version": "0.58.1" } ] } },
+  "components": [
+    { "type": "application", "name": "api/requirements.txt", "bom-ref": "app-1",
+      "properties": [ { "name": "aquasecurity:trivy:Type", "value": "pip" }, { "name": "aquasecurity:trivy:Class", "value": "lang-pkgs" } ] },
+    { "type": "library", "name": "Flask", "version": "3.0.2", "purl": "pkg:pypi/flask@3.0.2",
+      "properties": [ { "name": "aquasecurity:trivy:PkgType", "value": "pip" } ] },
+    { "type": "library", "name": "requests", "version": "2.31.0", "purl": "pkg:pypi/requests@2.31.0",
+      "properties": [ { "name": "aquasecurity:trivy:PkgType", "value": "pip" } ] },
+    { "type": "library", "name": "PyYAML", "version": "6.0", "purl": "pkg:pypi/pyyaml@6.0",
+      "properties": [ { "name": "aquasecurity:trivy:PkgType", "value": "pip" } ] },
+    { "type": "library", "name": "Flask_Login", "version": "0.6.3", "purl": "pkg:pypi/flask-login@0.6.3",
+      "properties": [ { "name": "aquasecurity:trivy:PkgType", "value": "pip" } ] },
+    { "type": "library", "name": "cryptography", "version": "42.0.0", "purl": "pkg:pypi/cryptography@42.0.0",
+      "properties": [ { "name": "aquasecurity:trivy:PkgType", "value": "pip" } ] },
+
+    { "type": "application", "name": "go.mod", "bom-ref": "app-2",
+      "properties": [ { "name": "aquasecurity:trivy:Type", "value": "gomod" }, { "name": "aquasecurity:trivy:Class", "value": "lang-pkgs" } ] },
+    { "type": "library", "name": "github.com/gorilla/mux", "version": "v1.8.1", "purl": "pkg:golang/github.com/gorilla/mux@v1.8.1",
+      "properties": [ { "name": "aquasecurity:trivy:PkgType", "value": "gomod" } ] },
+    { "type": "library", "name": "golang.org/x/crypto", "version": "v0.17.0", "purl": "pkg:golang/golang.org/x/crypto@v0.17.0",
+      "properties": [ { "name": "aquasecurity:trivy:PkgType", "value": "gomod" } ] },
+    { "type": "library", "name": "github.com/gin-gonic/gin", "version": "v1.9.1", "purl": "pkg:golang/github.com/gin-gonic/gin@v1.9.1",
+      "properties": [ { "name": "aquasecurity:trivy:PkgType", "value": "gomod" } ] }
+  ]
+}
+JSON

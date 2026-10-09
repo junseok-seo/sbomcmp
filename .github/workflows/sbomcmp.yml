@@ -1,0 +1,64 @@
+# Runs every available SBOM generator on each PR, compares them, and posts
+# the Markdown report as a PR comment. Copy into any repository; replace the
+# "Build sbomcmp" step with `go install github.com/junseok-seo/sbomcmp@latest`
+# (or download a release binary) when the repository is not sbomcmp itself.
+name: sbomcmp
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+
+      - name: Install generators
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          npm install -g @cyclonedx/cdxgen
+          trivy --version && syft version && cdxgen --version
+
+      - name: Build sbomcmp
+        run: go build -o "$HOME/go/bin/sbomcmp" . && echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: Scan
+        env:
+          VDB_API_KEY: ${{ secrets.VDB_API_KEY }}   # optional: switches the vuln source to VDB (slopsquat + MCP registry signals)
+        run: sbomcmp scan -o sbomcmp.json .
+
+      - name: Report
+        run: sbomcmp report -i sbomcmp.json > report.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbomcmp
+          path: |
+            sbomcmp.json
+            sbomcmp.raw/
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('report.md', 'utf8');
+            const marker = '<!-- sbomcmp -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo, issue_number: context.issue.number });
+            const prev = comments.find(c => c.body && c.body.startsWith(marker));
+            const payload = { ...context.repo, body: marker + '\n' + body };
+            if (prev) await github.rest.issues.updateComment({ ...payload, comment_id: prev.id });
+            else await github.rest.issues.createComment({ ...payload, issue_number: context.issue.number });
