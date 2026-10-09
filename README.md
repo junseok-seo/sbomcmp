@@ -88,7 +88,7 @@ Disagreement rows (components not every tool found) are checked against a vulner
 | `--vuln-source` | What happens |
 |---|---|
 | `auto` (default) | `vdb` when `VDB_API_KEY` is set, otherwise `osv` |
-| `osv` | [OSV](https://osv.dev) batch query plus per-advisory details (CVSS v3 scored locally). No account needed. `--osv-api` points at any OSV-compatible server. |
+| `osv` | [OSV](https://osv.dev) batch query plus per-advisory details (CVSS v3 and v4 scored locally; a server-side `vdb_severity` rating is preferred when present). No account needed. `--osv-api` points at any OSV-compatible server, including a VDB deployment (`--osv-api https://vdb.ai.kr` with `VDB_API_KEY`). |
 | `vdb` | [VDB](https://vdb.ai.kr) `check-packages`: advisories with KEV/EPSS and malicious-release flags, plus the signals below. Works without a key on a quota of 100 packages per hour. |
 | `none` | skip enrichment (`--no-vuln`) |
 
@@ -111,7 +111,7 @@ sbomcmp scan ./repo
 
 With VDB active:
 
-- Rows whose name **does not exist on the registry** get a `slopsquat` signal. That turns "found only by tool A" into "tool A copied a hallucinated dependency out of the manifest".
+- Rows whose name **does not exist on the registry** get a `slopsquat` signal. That turns "found only by tool A" into "tool A copied a hallucinated dependency out of the manifest". Packages the project declares itself (its own `package.json`, `Cargo.toml`, `pyproject.toml`, `go.mod`, or a generator's `metadata.component`) are marked **first-party** and left out of registry checks, so an unpublished internal package is not reported as squatting.
 - Discovered MCP servers get a **Registry** column: trust tier, scopes, risk score, and recent scope changes. Servers VDB has never seen are marked unverified.
 - Advisories carry **KEV** and **EPSS** so a critical nobody exploits ranks below a medium that is being exploited, and **malicious releases** (MAL-* reports) are flagged as something to remove, not upgrade. The viewer sorts by KEV, then EPSS, then severity when VDB data is present, and the report's "Disagreements that matter" table gains an EPSS column.
 

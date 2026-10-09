@@ -61,21 +61,46 @@ type spdxPackage struct {
 	} `json:"externalRefs"`
 }
 
+// Doc is a parsed SBOM.
+type Doc struct {
+	Components []model.Component
+	Format     string           // cyclonedx-1.6 / spdx
+	Skipped    int              // version-less entries not turned into components
+	Root       *model.Component // CycloneDX metadata.component when it names a package
+}
+
 // Parse decodes a CycloneDX (or SPDX) JSON document into components.
 // The second return value is a short description of the format detected and
 // the third the number of version-less entries that were skipped: a component
 // without a version (typically the scanned module itself) cannot be compared
 // or looked up, so it is counted rather than turned into a row.
 func Parse(data []byte) ([]model.Component, string, int, error) {
+	d, err := ParseDoc(data)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	return d.Components, d.Format, d.Skipped, nil
+}
+
+// ParseDoc is Parse plus the document's root component.
+func ParseDoc(data []byte) (*Doc, error) {
 	var doc cdxDoc
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, "", 0, fmt.Errorf("decode: %w", err)
+		return nil, fmt.Errorf("decode: %w", err)
 	}
 	if doc.BOMFormat == "CycloneDX" || len(doc.Components) > 0 {
 		out := make([]model.Component, 0, len(doc.Components))
 		skipped := 0
 		walk(doc.Components, &out, &skipped)
-		return dedupe(out), "cyclonedx-" + doc.SpecVersion, skipped, nil
+		d := &Doc{Components: dedupe(out), Format: "cyclonedx-" + doc.SpecVersion, Skipped: skipped}
+		if mc := doc.Metadata; mc != nil && mc.Component != nil && (mc.Component.Purl != "" || mc.Component.Version != "") {
+			c := mc.Component
+			root := build(c.Purl, c.Group, c.Name, c.Version, c.Scope, nil)
+			if root.Type != "unknown" || c.Purl != "" {
+				d.Root = &root
+			}
+		}
+		return d, nil
 	}
 	if doc.SPDXID != "" || len(doc.Packages) > 0 {
 		out := make([]model.Component, 0, len(doc.Packages))
@@ -105,9 +130,9 @@ func Parse(data []byte) ([]model.Component, string, int, error) {
 			}
 			out = append(out, c)
 		}
-		return dedupe(out), "spdx", skipped, nil
+		return &Doc{Components: dedupe(out), Format: "spdx", Skipped: skipped}, nil
 	}
-	return nil, "", 0, fmt.Errorf("unrecognized document (no bomFormat / SPDXID)")
+	return nil, fmt.Errorf("unrecognized document (no bomFormat / SPDXID)")
 }
 
 func walk(cs []cdxComponent, out *[]model.Component, skipped *int) {

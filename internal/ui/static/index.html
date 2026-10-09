@@ -276,6 +276,7 @@ function renderVStatus(){
   const queried=v.queried||0, answered=v.answered??queried, short=answered<queried;
   let h=`<span class="label"><strong>Vulnerability data:</strong> ${esc(src)}${src==="vdb"?(v.anonymous?" (anonymous)":" (keyed)"):""}</span>`;
   h+=`${sep}<span>answered <strong>${answered}</strong> of ${queried}</span>`;
+  if(v.firstParty)h+=`${sep}<span>${v.firstParty} first-party not checked</span>`;
   if(v.detailsCapped)h+=`${sep}<span><strong>${v.detailsCapped}</strong> advisories unscored (OSV detail cap), shown as UNKNOWN</span>`;
   if(src==="vdb"||v.vdbExtras){
     const kev=R.rows.filter(hasKEV).length;
@@ -347,7 +348,7 @@ function renderMatrix(){
       }
     }
     h+=`<td class="vul">`;
-    if(sev)h+=`<span class="pill sev-${esc(sev)}">${esc(sev)}</span> ${r.vulnTotal&&r.vulnTotal>(r.vulns||[]).length?r.vulnTotal:(r.vulns||[]).length}${hasMal(r)?' <span class="pill sig refuse" title="Known malicious package release">MALICIOUS</span>':''}${hasKEV(r)?' <span class="pill sig refuse" title="CISA Known Exploited Vulnerabilities">KEV</span>':''}${maxEPSS(r)>0?` <span class="ok" title="EPSS: probability of exploitation in the next 30 days">EPSS ${(maxEPSS(r)*100).toFixed(1)}%</span>`:''}`;
+    if(sev)h+=`<span class="pill sev-${esc(sev)}">${esc(sev)}</span> ${r.vulnTotal&&r.vulnTotal>(r.vulns||[]).length?r.vulnTotal:(r.vulns||[]).length}${r.firstParty?` <span class="pill sig" title="Declared by this project (${esc(r.firstPartySource||"")}); not a registry dependency, so not checked">first-party</span>`:''}${hasMal(r)?' <span class="pill sig refuse" title="Known malicious package release">MALICIOUS</span>':''}${hasKEV(r)?' <span class="pill sig refuse" title="CISA Known Exploited Vulnerabilities">KEV</span>':''}${maxEPSS(r)>0?` <span class="ok" title="EPSS: probability of exploitation in the next 30 days">EPSS ${(maxEPSS(r)*100).toFixed(1)}%</span>`:''}`;
     for(const s of r.signals||[])h+=` <span class="pill sig ${esc(s.level)}">${esc(s.kind)}</span>`;
     h+=`</td><td class="why">${esc((r.reasons||[]).map(x=>x.split(":")[0]).filter((v,i,a)=>a.indexOf(v)===i).join(", "))}</td></tr>`;
   }

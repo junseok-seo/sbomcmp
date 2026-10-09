@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -79,6 +80,12 @@ func Enrich(ctx context.Context, cfg Config, rows []model.Row, meta *model.VulnM
 		if r.Type == "unknown" || r.Version == "" {
 			continue
 		}
+		if r.FirstParty {
+			// The project's own package: not on a registry by design, and
+			// its advisories (if any) would be about itself.
+			meta.FirstParty++
+			continue
+		}
 		idx = append(idx, i)
 	}
 	meta.Queried = len(idx)
@@ -101,7 +108,12 @@ func Enrich(ctx context.Context, cfg Config, rows []model.Row, meta *model.VulnM
 		}
 		err = fromVDB(ctx, c, rows, idx, meta)
 	default:
-		c := osv.New(cfg.OSVEndpoint, "", cfg.Timeout)
+		// A VDB deployment also serves the OSV endpoints (needs the key).
+		key := ""
+		if cfg.OSVEndpoint != "" && cfg.VDBKey != "" && sameHost(cfg.OSVEndpoint, firstNonEmpty(cfg.VDBEndpoint, vdb.DefaultEndpoint)) {
+			key = cfg.VDBKey
+		}
+		c := osv.New(cfg.OSVEndpoint, key, cfg.Timeout)
 		meta.Endpoint = c.Endpoint
 		var st osv.Stats
 		st, err = c.Enrich(ctx, rows, idx, QueryPurl, "osv")
@@ -212,7 +224,7 @@ func EnrichMCP(ctx context.Context, cfg Config, servers []model.MCPServer, meta 
 			}
 			switch {
 			case len(r.Vulns) == 0:
-			case r.Version == "":
+			case (r.VersionEvaluated != nil && !*r.VersionEvaluated) || (r.VersionEvaluated == nil && r.Version == ""):
 				// Unpinned launcher: the advisories are for some version of the
 				// package, not necessarily the one that will run. One warning.
 				ids := make([]string, 0, len(r.Vulns))
@@ -233,6 +245,21 @@ func EnrichMCP(ctx context.Context, cfg Config, servers []model.MCPServer, meta 
 			meta.VDBExtras = true
 		}
 	}
+}
+
+func sameHost(a, b string) bool {
+	ua, ea := url.Parse(a)
+	ub, eb := url.Parse(b)
+	return ea == nil && eb == nil && ua.Host != "" && strings.EqualFold(ua.Host, ub.Host)
+}
+
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func levelFor(bucket string, kev bool) string {

@@ -3,13 +3,23 @@ package osv
 import (
 	"math"
 	"strings"
+
+	gocvss40 "github.com/pandatix/go-cvss/40"
 )
 
-// BaseScore computes the CVSS v3.0/v3.1 base score from a vector string.
-// It returns 0 when the vector is not a parsable v3 vector (v2 and v4 are not
-// scored here; callers fall back to database-provided severities).
+// BaseScore computes the base score of a CVSS v3.0/v3.1 vector (own
+// implementation of the formula) or a CVSS v4.0 vector (go-cvss; v4 is a
+// macro-vector lookup table, not a formula). It returns 0 when the vector is
+// not parsable, and callers fall back to database-provided severities.
 func BaseScore(vec string) float64 {
 	vec = strings.TrimSpace(vec)
+	if strings.HasPrefix(vec, "CVSS:4.0/") {
+		v4, err := gocvss40.ParseVector(vec)
+		if err != nil {
+			return 0
+		}
+		return v4.Score()
+	}
 	if !strings.HasPrefix(vec, "CVSS:3.") {
 		return 0
 	}

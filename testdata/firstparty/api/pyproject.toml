@@ -1,0 +1,7 @@
+[project]
+name = "VDB_Api"
+version = "2.0.0"
+dependencies = ["flask==3.0.2"]
+
+[tool.poetry]
+name = "ignored-when-project-present"
