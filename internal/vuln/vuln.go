@@ -103,10 +103,17 @@ func Enrich(ctx context.Context, cfg Config, rows []model.Row, meta *model.VulnM
 	default:
 		c := osv.New(cfg.OSVEndpoint, "", cfg.Timeout)
 		meta.Endpoint = c.Endpoint
-		err = c.Enrich(ctx, rows, idx, QueryPurl, "osv")
+		var st osv.Stats
+		st, err = c.Enrich(ctx, rows, idx, QueryPurl, "osv")
+		meta.Answered = st.Answered
+		meta.DetailsCapped = st.DetailsCapped
+		if st.DetailsCapped > 0 {
+			meta.Note = fmt.Sprintf("%d advisories were not scored (OSV detail cap of %d); shown as UNKNOWN", st.DetailsCapped, c.MaxDetails)
+		}
 	}
 	if err != nil {
 		meta.Error = err.Error()
+		meta.Answered = 0
 		cfg.Log("[vuln] disabled: " + err.Error())
 		return
 	}
@@ -135,6 +142,7 @@ func fromVDB(ctx context.Context, c *vdb.Client, rows []model.Row, idx []int, me
 	if err != nil && answered == 0 {
 		return err
 	}
+	meta.Answered = answered
 	meta.VDBExtras = true
 	if answered < len(idx) {
 		meta.Note = fmt.Sprintf("VDB answered %d of %d queries", answered, len(idx))
@@ -252,6 +260,7 @@ func fromFixture(path string, rows []model.Row, idx []int, meta *model.VulnMeta)
 	if err != nil {
 		return err
 	}
+	meta.Answered = len(idx)
 	for _, i := range idx {
 		p := QueryPurl(rows[i])
 		if vs, ok := fx.Vulns[p]; ok {

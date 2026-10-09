@@ -161,16 +161,23 @@ type Recommendation struct {
 
 // VulnMeta records which vulnerability source was used.
 type VulnMeta struct {
-	Enabled   bool   `json:"enabled"`
-	Source    string `json:"source"` // osv / vdb / fixture / none
-	Endpoint  string `json:"endpoint,omitempty"`
-	Queried   int    `json:"queried"`
-	Hits      int    `json:"hits"`
-	Error     string `json:"error,omitempty"`
-	Note      string `json:"note,omitempty"`
-	VDBExtras bool   `json:"vdbExtras"` // slopsquat / MCP registry signals active
-	Anonymous bool   `json:"anonymous,omitempty"`
+	Enabled  bool   `json:"enabled"`
+	Source   string `json:"source"` // osv / vdb / fixture / none
+	Endpoint string `json:"endpoint,omitempty"`
+	Queried  int    `json:"queried"`  // rows sent to the source
+	Answered int    `json:"answered"` // rows the source actually answered (== Queried when complete)
+	Hits     int    `json:"hits"`
+	// DetailsCapped counts advisories left at UNKNOWN severity because the
+	// OSV per-advisory detail fetch cap was hit (osv source only).
+	DetailsCapped int    `json:"detailsCapped,omitempty"`
+	Error         string `json:"error,omitempty"`
+	Note          string `json:"note,omitempty"`
+	VDBExtras     bool   `json:"vdbExtras"` // slopsquat / MCP registry signals active
+	Anonymous     bool   `json:"anonymous,omitempty"`
 }
+
+// Complete reports whether every queried row got an answer.
+func (m VulnMeta) Complete() bool { return m.Enabled && m.Answered >= m.Queried }
 
 // SeverityRank orders severity buckets.
 var SeverityRank = map[string]int{
@@ -189,4 +196,68 @@ func MaxSeverity(vs []Vuln) string {
 		return "UNKNOWN"
 	}
 	return best
+}
+
+// VDBAdditions counts what a VDB-backed scan adds beyond plain advisories:
+// rows with a CISA KEV entry, rows whose top EPSS is at least EPSSNotable,
+// rows with a slopsquat signal, and MCP servers found in the registry.
+type VDBAdditions struct {
+	KEVRows     int `json:"kevRows"`
+	EPSSRows    int `json:"epssRows"`
+	SlopRows    int `json:"slopRows"`
+	MCPRegistry int `json:"mcpRegistry"`
+}
+
+// EPSSNotable is the exploit-probability threshold used for EPSSRows.
+const EPSSNotable = 0.1
+
+// Any reports whether at least one counter is non-zero.
+func (a VDBAdditions) Any() bool {
+	return a.KEVRows+a.EPSSRows+a.SlopRows+a.MCPRegistry > 0
+}
+
+// MaxEPSS returns the highest EPSS among a row's vulnerabilities (0 when none).
+func (r Row) MaxEPSS() float64 {
+	best := 0.0
+	for _, v := range r.Vulns {
+		if v.EPSS > best {
+			best = v.EPSS
+		}
+	}
+	return best
+}
+
+// HasKEV reports whether any of the row's vulnerabilities is in CISA KEV.
+func (r Row) HasKEV() bool {
+	for _, v := range r.Vulns {
+		if v.KEV {
+			return true
+		}
+	}
+	return false
+}
+
+// SummarizeVDB computes VDBAdditions over a result.
+func SummarizeVDB(res *Result) VDBAdditions {
+	var a VDBAdditions
+	for _, r := range res.Rows {
+		if r.HasKEV() {
+			a.KEVRows++
+		}
+		if r.MaxEPSS() >= EPSSNotable {
+			a.EPSSRows++
+		}
+		for _, s := range r.Signals {
+			if s.Kind == "slopsquat" {
+				a.SlopRows++
+				break
+			}
+		}
+	}
+	for _, m := range res.MCP {
+		if m.Registry != nil && m.Registry.TrustTier != "unverified" {
+			a.MCPRegistry++
+		}
+	}
+	return a
 }

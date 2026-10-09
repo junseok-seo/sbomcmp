@@ -113,7 +113,9 @@ With VDB active:
 
 - Rows whose name **does not exist on the registry** get a `slopsquat` signal. That turns "found only by tool A" into "tool A copied a hallucinated dependency out of the manifest".
 - Discovered MCP servers get a **Registry** column: trust tier, scopes, risk score, and recent scope changes. Servers VDB has never seen are marked unverified.
-- Advisories carry **KEV** and **EPSS** so a critical nobody exploits ranks below a medium that is being exploited.
+- Advisories carry **KEV** and **EPSS** so a critical nobody exploits ranks below a medium that is being exploited. The viewer sorts by KEV, then EPSS, then severity when VDB data is present, and the report's "Disagreements that matter" table gains an EPSS column.
+
+Coverage is always visible: the status strip under the verdict (and the `Vulnerability data:` line in the report) says which source answered, keyed or anonymous, how many of the queried rows got an answer, and what VDB added (KEV rows, rows with EPSS ≥ 10%, slopsquat signals, MCP registry hits). When the anonymous quota runs out mid-scan the strip turns amber and shows the fix; the same shortfall appears as a recommendation caveat. OSV runs that hit the per-advisory detail cap report how many advisories were left at UNKNOWN.
 
 Without a key, sbomcmp behaves exactly as before against public OSV. `VDB_API_URL` or `--vdb-api` points at a self-hosted deployment.
 
