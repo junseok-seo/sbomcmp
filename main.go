@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -28,8 +29,18 @@ import (
 	"github.com/junseok-seo/sbomcmp/internal/vuln"
 )
 
-// version is set at build time: -ldflags "-X main.version=v0.2.0".
+// version is set at build time: -ldflags "-X main.version=v0.2.0". Binaries
+// built by "go install …@vX.Y.Z" get the module version from build info.
 var version = "dev"
+
+func init() {
+	if version != "dev" {
+		return
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		version = bi.Main.Version
+	}
+}
 
 func main() {
 	if len(os.Args) < 2 {

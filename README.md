@@ -35,7 +35,19 @@ sbomcmp automates the comparison and, more importantly, the explanation. "cdxgen
 go install github.com/junseok-seo/sbomcmp@latest
 ```
 
-Or download a binary from [Releases](https://github.com/junseok-seo/sbomcmp/releases), or clone and `make build` (Go 1.24+). There are no runtime dependencies beyond the generators themselves.
+`go install` puts the binary in `$(go env GOPATH)/bin` (usually `~/go/bin`). If `sbomcmp` is not found afterwards, that directory is not on your `PATH`:
+
+```sh
+echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+```
+
+Or download a binary from [Releases](https://github.com/junseok-seo/sbomcmp/releases) and put it somewhere on your `PATH`:
+
+```sh
+curl -sSfL https://github.com/junseok-seo/sbomcmp/releases/latest/download/sbomcmp_darwin_arm64 -o /usr/local/bin/sbomcmp && chmod +x /usr/local/bin/sbomcmp
+```
+
+(Pick `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64` or `windows_amd64.exe`.) Or clone and `make build` (Go 1.24+). There are no runtime dependencies beyond the generators themselves.
 
 Install whichever generators you want compared; sbomcmp detects them on `PATH` and skips the rest:
 
