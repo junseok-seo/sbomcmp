@@ -13,10 +13,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/junseok-seo/sbomcmp/internal/model"
@@ -33,7 +36,7 @@ type Client struct {
 	Endpoint string
 	APIKey   string
 	HTTP     *http.Client
-	// Batch is the number of purls per request (defaults: 100 with a key, 5 without).
+	// Batch is the number of purls per request (defaults: KeyedBatch with a key, AnonymousBatch without).
 	Batch int
 }
 
@@ -49,7 +52,7 @@ func New(endpoint, apiKey string, timeout time.Duration) *Client {
 	if apiKey == "" {
 		c.Batch = AnonymousBatch
 	} else {
-		c.Batch = 100
+		c.Batch = KeyedBatch
 	}
 	return c
 }
@@ -144,64 +147,162 @@ type response struct {
 	} `json:"truncated"`
 }
 
+// KeyedBatch is the purls-per-request default with an API key. VDB probes
+// every package against its live registry (8 workers, 5 s each) and runs
+// per-package slop lookups, so 100-package requests routinely exceed a
+// minute; 20 keeps one request well under the client timeout.
+const KeyedBatch = 20
+
+// Concurrency is the number of keyed requests in flight at once.
+const Concurrency = 4
+
 // Check runs check-packages over purls in batches. The returned slice is
 // aligned with the input; entries VDB did not answer (quota exhausted,
-// truncated) are nil. The quota of the last response is returned when the
-// call was anonymous.
+// truncated, failed after retry) are nil. Anonymous calls run one batch at
+// a time so the quota can stop them; keyed calls run Concurrency batches in
+// parallel. A batch that times out or gets a 5xx is retried once as two
+// halves. The returned error describes the first failure, but partial
+// results are still filled in. The quota of the last response is returned
+// when the call was anonymous.
 func (c *Client) Check(ctx context.Context, purls []string) ([]*Result, *Quota, error) {
 	out := make([]*Result, len(purls))
-	var quota *Quota
 	batch := c.Batch
 	if batch <= 0 {
-		batch = AnonymousBatch
+		if c.APIKey == "" {
+			batch = AnonymousBatch
+		} else {
+			batch = KeyedBatch
+		}
 	}
+	type chunk struct{ start, end int }
+	var chunks []chunk
 	for start := 0; start < len(purls); start += batch {
-		if quota != nil && quota.Remaining == 0 {
-			break
-		}
-		end := min(start+batch, len(purls))
-		body, _ := json.Marshal(map[string]any{"packages": purls[start:end], "probe_registry": true})
-		req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+"/v1/ai/check-packages", bytes.NewReader(body))
-		if err != nil {
-			return out, quota, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json")
-		req.Header.Set("User-Agent", "sbomcmp")
-		if c.APIKey != "" {
-			req.Header.Set("Authorization", "Bearer "+c.APIKey)
-		}
-		resp, err := c.HTTP.Do(req)
-		if err != nil {
-			return out, quota, fmt.Errorf("check-packages: %w", err)
-		}
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-		resp.Body.Close()
-		if resp.StatusCode == 401 {
-			return out, quota, fmt.Errorf("check-packages: HTTP 401 — VDB_API_KEY was rejected")
-		}
-		if resp.StatusCode == 429 {
-			return out, quota, fmt.Errorf("check-packages: HTTP 429 — anonymous quota exhausted; set VDB_API_KEY (free at %s/signup)", c.Endpoint)
-		}
-		if resp.StatusCode/100 != 2 {
-			return out, quota, fmt.Errorf("check-packages: HTTP %d: %s", resp.StatusCode, truncate(strings.TrimSpace(string(data)), 200))
-		}
-		var r response
-		if err := json.Unmarshal(data, &r); err != nil {
-			return out, quota, fmt.Errorf("check-packages decode: %w", err)
-		}
-		if r.Anonymous != nil {
-			quota = r.Anonymous
-		}
-		// Results are aligned with the request; VDB may answer fewer when it truncates.
-		for k := range r.Results {
-			if start+k < len(out) {
-				rr := r.Results[k]
-				out[start+k] = &rr
+		chunks = append(chunks, chunk{start, min(start+batch, len(purls))})
+	}
+
+	if c.APIKey == "" {
+		var quota *Quota
+		for _, ch := range chunks {
+			if quota != nil && quota.Remaining == 0 {
+				break
 			}
+			r, err := c.post(ctx, purls[ch.start:ch.end])
+			if err != nil {
+				return out, quota, err
+			}
+			if r.Anonymous != nil {
+				quota = r.Anonymous
+			}
+			fill(out, ch.start, r.Results)
+		}
+		return out, quota, nil
+	}
+
+	var mu sync.Mutex
+	var firstErr error
+	sem := make(chan struct{}, Concurrency)
+	var wg sync.WaitGroup
+	for _, ch := range chunks {
+		wg.Add(1)
+		go func(ch chunk) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			err := c.checkRetry(ctx, purls, ch.start, ch.end, out, &mu, true)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}(ch)
+	}
+	wg.Wait()
+	return out, nil, firstErr
+}
+
+// checkRetry posts one slice; on a timeout or 5xx it splits the slice in two
+// and tries each half once more.
+func (c *Client) checkRetry(ctx context.Context, purls []string, start, end int, out []*Result, mu *sync.Mutex, allowSplit bool) error {
+	r, err := c.post(ctx, purls[start:end])
+	if err == nil {
+		mu.Lock()
+		fill(out, start, r.Results)
+		mu.Unlock()
+		return nil
+	}
+	if !allowSplit || end-start < 2 || !retryable(err) || ctx.Err() != nil {
+		return err
+	}
+	mid := start + (end-start)/2
+	e1 := c.checkRetry(ctx, purls, start, mid, out, mu, false)
+	e2 := c.checkRetry(ctx, purls, mid, end, out, mu, false)
+	if e1 != nil {
+		return e1
+	}
+	return e2
+}
+
+func fill(out []*Result, start int, results []Result) {
+	for k := range results {
+		if start+k < len(out) {
+			rr := results[k]
+			out[start+k] = &rr
 		}
 	}
-	return out, quota, nil
+}
+
+type httpError struct {
+	status int
+	msg    string
+}
+
+func (e *httpError) Error() string { return e.msg }
+
+func retryable(err error) bool {
+	var he *httpError
+	if errors.As(err, &he) {
+		return he.status >= 500
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
+func (c *Client) post(ctx context.Context, purls []string) (*response, error) {
+	body, _ := json.Marshal(map[string]any{"packages": purls, "probe_registry": true})
+	req, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint+"/v1/ai/check-packages", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "sbomcmp")
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("check-packages (%d packages): %w", len(purls), err)
+	}
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	resp.Body.Close()
+	switch {
+	case resp.StatusCode == 401:
+		return nil, &httpError{401, "check-packages: HTTP 401 — VDB_API_KEY was rejected"}
+	case resp.StatusCode == 429:
+		return nil, &httpError{429, fmt.Sprintf("check-packages: HTTP 429 — anonymous quota exhausted; set VDB_API_KEY (free at %s/signup)", c.Endpoint)}
+	case resp.StatusCode/100 != 2:
+		return nil, &httpError{resp.StatusCode, fmt.Sprintf("check-packages (%d packages): HTTP %d: %s", len(purls), resp.StatusCode, truncate(strings.TrimSpace(string(data)), 200))}
+	}
+	var r response
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, fmt.Errorf("check-packages decode: %w", err)
+	}
+	return &r, nil
 }
 
 // Apply writes a check-packages result onto a comparison row: advisories as
