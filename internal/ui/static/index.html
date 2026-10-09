@@ -201,6 +201,7 @@ footer{margin-top:40px;color:var(--muted);font-size:13px}
         <button data-f="single" aria-pressed="false">Only one tool</button>
         <button data-f="vuln" aria-pressed="false">Vulnerable</button>
         <button data-f="signal" aria-pressed="false">Signals</button>
+        <button data-f="installed" aria-pressed="false" title="Seen only inside node_modules, .venv or similar: on this machine, not in a tracked manifest">Installed only</button>
       </div>
       <select id="type-filter"><option value="">All ecosystems</option></select>
       <select id="sort" title="Row order"><option value="sev">Sort: severity</option><option value="kev">Sort: KEV / EPSS</option></select>
@@ -274,7 +275,7 @@ function renderVerdict(){
       <span class="bar" title="${pct}% of union"><i style="width:${pct}%"></i><b style="width:${vulnW}%;left:${pct-vulnW}%"></b></span>
       <span class="n"><strong>${s.total}</strong> / ${union}${s.unique?` · ${s.unique} only here`:""}</span></div>`;
   }
-  h+=`<div class="legend"><i></i>found by this tool<b></b>found only here and vulnerable</div></div>`;
+  h+=`<div class="legend"><i></i>components this tool found<b></b>of which vulnerable and found by no other tool</div></div>`;
   $("verdict").innerHTML=h;
 }
 
@@ -348,6 +349,7 @@ function rowsFiltered(){
     if(filter==="single"&&r.agreement!=="single")return false;
     if(filter==="vuln"&&!(r.vulns&&r.vulns.length))return false;
     if(filter==="signal"&&!(r.signals&&r.signals.length))return false;
+    if(filter==="installed"&&!r.installed)return false;
     if(typeF&&r.type!==typeF)return false;
     if(ql&&!(r.key.toLowerCase().includes(ql)))return false;
     return true;
@@ -388,7 +390,7 @@ function renderMatrix(){
       }
     }
     h+=`<td class="vul">`;
-    if(sev)h+=`<span class="pill sev-${esc(sev)}">${esc(sev)}</span> ${r.vulnTotal&&r.vulnTotal>(r.vulns||[]).length?r.vulnTotal:(r.vulns||[]).length}${r.firstParty?` <span class="pill sig" title="Declared by this project (${esc(r.firstPartySource||"")}); not a registry dependency, so not checked">first-party</span>`:''}${hasMal(r)?' <span class="pill sig refuse" title="Known malicious package release">MALICIOUS</span>':''}${hasKEV(r)?' <span class="pill sig refuse" title="CISA Known Exploited Vulnerabilities">KEV</span>':''}${maxEPSS(r)>0?` <span class="ok" title="EPSS: probability of exploitation in the next 30 days">EPSS ${(maxEPSS(r)*100).toFixed(1)}%</span>`:''}`;
+    if(sev)h+=`<span class="pill sev-${esc(sev)}">${esc(sev)}</span> ${r.vulnTotal&&r.vulnTotal>(r.vulns||[]).length?r.vulnTotal:(r.vulns||[]).length}${r.firstParty?` <span class="pill sig" title="Declared by this project (${esc(r.firstPartySource||"")}); not a registry dependency, so not checked">first-party</span>`:''}${r.installed?` <span class="pill sig" style="opacity:.7" title="Seen only inside an installed tree (node_modules, .venv, …), never in a tracked manifest or lockfile; left out of Act now">installed</span>`:''}${hasMal(r)?' <span class="pill sig refuse" title="Known malicious package release">MALICIOUS</span>':''}${hasKEV(r)?' <span class="pill sig refuse" title="CISA Known Exploited Vulnerabilities">KEV</span>':''}${maxEPSS(r)>0?` <span class="ok" title="EPSS: probability of exploitation in the next 30 days">EPSS ${(maxEPSS(r)*100).toFixed(1)}%</span>`:''}`;
     for(const s of r.signals||[])h+=` <span class="pill sig ${esc(s.level)}">${esc(s.kind)}</span>`;
     h+=`</td><td class="why">${esc((r.reasons||[]).map(x=>x.split(":")[0]).filter((v,i,a)=>a.indexOf(v)===i).join(", "))}</td></tr>`;
   }
@@ -400,7 +402,7 @@ function detailRow(r){
   let h=`<tr class="detail"><td colspan="${tools.length+4}"><div class="cells">`;
   for(const t of tools){
     const c=r.cells[t]||{};
-    h+=`<div><span class="t">${esc(t)}</span> ${c.found?"":"<span class='ok'>not found</span>"}<code>${esc(c.purl||"")}${c.scope?"  scope="+esc(c.scope):""}</code></div>`;
+    h+=`<div><span class="t">${esc(t)}</span> ${c.found?"":"<span class='ok'>not found</span>"}<code>${esc(c.purl||"")}${c.scope?"  scope="+esc(c.scope):""}</code>${c.paths&&c.paths.length?`<code class="ok" title="where this tool saw it">${c.paths.map(esc).join("<br>")}</code>`:""}</div>`;
   }
   h+=`</div>`;
   if(r.reasons&&r.reasons.length){h+=`<ul>`;for(const x of r.reasons)h+=`<li>${esc(x)}</li>`;h+=`</ul>`;}

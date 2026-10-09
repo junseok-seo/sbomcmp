@@ -1,6 +1,7 @@
 package compare
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -318,5 +319,35 @@ func TestDemoFixtureActions(t *testing.T) {
 	}
 	if !res.VDBSignalsActive() {
 		t.Fatal("fixture with vdbExtras must count as VDB-active")
+	}
+}
+
+func TestInstalledOnlyRowsStayOutOfActions(t *testing.T) {
+	cells := func(paths ...[]string) map[string]model.Cell {
+		m := map[string]model.Cell{}
+		for i, p := range paths {
+			m[fmt.Sprintf("t%d", i)] = model.Cell{Found: true, Paths: p}
+		}
+		return m
+	}
+	if !installedOnly(cells([]string{"/web/node_modules/x/package.json"}, []string{"/app/.venv/lib/site-packages/x"})) {
+		t.Fatal("all paths inside installed trees must classify as installed")
+	}
+	if installedOnly(cells([]string{"/web/node_modules/x/package.json"}, []string{"/web/package-lock.json"})) {
+		t.Fatal("a lockfile sighting makes it a declared dependency")
+	}
+	if installedOnly(cells(nil, nil)) {
+		t.Fatal("no evidence at all must not classify as installed")
+	}
+	if installedOnly(cells([]string{"/web/node_modules/x/package.json"}, nil)) != true {
+		t.Fatal("a tool without paths neither confirms nor denies")
+	}
+	rows := []model.Row{
+		{Key: "npm/x@1", Type: "npm", Installed: true, Vulns: []model.Vuln{{ID: "K", KEV: true, Severity: "HIGH"}}, MaxSev: "HIGH"},
+		{Key: "npm/y@1", Type: "npm", Vulns: []model.Vuln{{ID: "K2", KEV: true, Severity: "HIGH"}}, MaxSev: "HIGH"},
+	}
+	acts, total := actions(rows, nil)
+	if total != 1 || len(acts) != 1 || acts[0].Key != "npm/y@1" {
+		t.Fatalf("installed row must not produce an action: %+v", acts)
 	}
 }

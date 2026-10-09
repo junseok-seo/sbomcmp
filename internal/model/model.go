@@ -15,6 +15,7 @@ type Component struct {
 	Scope     string            `json:"scope,omitempty"` // required / optional / excluded / dev
 	Licenses  []string          `json:"licenses,omitempty"`
 	Props     map[string]string `json:"props,omitempty"` // selected tool-specific properties
+	Paths     []string          `json:"paths,omitempty"` // evidence file paths the tool reported (lockfile, manifest, binary)
 }
 
 // GeneratorRun is the record of one generator execution.
@@ -40,10 +41,11 @@ type GeneratorRun struct {
 
 // Cell is the per-tool observation of a component.
 type Cell struct {
-	Found   bool   `json:"found"`
-	Version string `json:"version,omitempty"` // version this tool reported (may differ from row.Version)
-	Purl    string `json:"purl,omitempty"`
-	Scope   string `json:"scope,omitempty"`
+	Found   bool     `json:"found"`
+	Version string   `json:"version,omitempty"` // version this tool reported (may differ from row.Version)
+	Purl    string   `json:"purl,omitempty"`
+	Scope   string   `json:"scope,omitempty"`
+	Paths   []string `json:"paths,omitempty"` // where this tool saw it (relative to the target when possible)
 }
 
 // Row is one normalized component across all tools.
@@ -71,6 +73,12 @@ type Row struct {
 	// (the version differs). A registry confirming the name does not exist
 	// promotes it to FirstParty; a registry hit means it is a real dependency.
 	FirstPartyCandidate string `json:"firstPartyCandidate,omitempty"`
+	// Installed is true when every tool that reported evidence for the row
+	// saw it only inside an installed tree (node_modules, .venv,
+	// site-packages, …) and never in a tracked manifest or lockfile. Such
+	// rows describe what is on this machine, not what the code depends on;
+	// they are kept in the matrix but left out of Act now.
+	Installed bool `json:"installed,omitempty"`
 }
 
 // Vuln is a vulnerability hit from an OSV-compatible source.

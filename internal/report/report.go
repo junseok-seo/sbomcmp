@@ -132,10 +132,10 @@ func Markdown(res *model.Result, maxRows int) string {
 				if v := r.MaxEPSS(); v > 0 {
 					e = fmt.Sprintf("%.1f%%", v*100)
 				}
-				w("| `%s` | %s | %s | %s | %s | %s |\n", r.Key, strings.Join(r.FoundBy, ", "), r.MaxSev, e,
+				w("| `%s` | %s | %s | %s | %s | %s |\n", r.Key+installedMark(r), strings.Join(r.FoundBy, ", "), r.MaxSev, e,
 					strings.Join(ids, "<br>"), cell(strings.Join(r.Reasons, "<br>")))
 			} else {
-				w("| `%s` | %s | %s | %s | %s |\n", r.Key, strings.Join(r.FoundBy, ", "), r.MaxSev,
+				w("| `%s` | %s | %s | %s | %s |\n", r.Key+installedMark(r), strings.Join(r.FoundBy, ", "), r.MaxSev,
 					strings.Join(ids, "<br>"), cell(strings.Join(r.Reasons, "<br>")))
 			}
 		}
@@ -222,6 +222,14 @@ func ActionLines(actions []model.Action) []string {
 		out = append(out, fmt.Sprintf("[%s] %s — %s → %s", a.Level, key, a.Message, a.Fix))
 	}
 	return out
+}
+
+// installedMark tags rows seen only inside installed trees.
+func installedMark(r model.Row) string {
+	if r.Installed {
+		return "` (installed tree) `"
+	}
+	return ""
 }
 
 // cell escapes pipes so free text cannot break a Markdown table.

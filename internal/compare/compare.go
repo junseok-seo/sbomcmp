@@ -37,7 +37,7 @@ func Build(runs []model.GeneratorRun) ([]model.Row, []model.PairDiff) {
 				}
 				rows[c.Key] = row
 			}
-			row.Cells[r.Name] = model.Cell{Found: true, Version: c.Version, Purl: c.Purl, Scope: c.Scope}
+			row.Cells[r.Name] = model.Cell{Found: true, Version: c.Version, Purl: c.Purl, Scope: c.Scope, Paths: trimPaths(c.Paths, 6)}
 			if nameVersions[c.NameKey] == nil {
 				nameVersions[c.NameKey] = map[string]map[string]bool{}
 			}
@@ -70,6 +70,7 @@ func Build(runs []model.GeneratorRun) ([]model.Row, []model.PairDiff) {
 		if row.Agreement != "all" {
 			row.Reasons = explain(row, tools, nameVersions, toolTypes)
 		}
+		row.Installed = installedOnly(row.Cells)
 		out = append(out, *row)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -119,6 +120,49 @@ func Build(runs []model.GeneratorRun) ([]model.Row, []model.PairDiff) {
 		}
 	}
 	return out, pairs
+}
+
+// installedDirs are directories whose contents describe what is installed on
+// this machine rather than what the code declares.
+var installedDirs = []string{"node_modules", ".venv", "venv", "site-packages", "__pycache__", ".tox", "bower_components", ".pnpm-store", "jspm_packages"}
+
+// InstalledPath reports whether a path lies inside an installed tree.
+func InstalledPath(p string) bool {
+	p = strings.ReplaceAll(p, "\\", "/")
+	for _, seg := range strings.Split(p, "/") {
+		for _, d := range installedDirs {
+			if seg == d {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// installedOnly is true when at least one tool reported evidence paths and
+// every reported path is inside an installed tree. Tools that report no
+// paths (lockfile-only scanners usually do not) neither confirm nor deny.
+func installedOnly(cells map[string]model.Cell) bool {
+	seen := false
+	for _, c := range cells {
+		if !c.Found {
+			continue
+		}
+		for _, p := range c.Paths {
+			seen = true
+			if !InstalledPath(p) {
+				return false
+			}
+		}
+	}
+	return seen
+}
+
+func trimPaths(ps []string, n int) []string {
+	if len(ps) <= n {
+		return ps
+	}
+	return append(append([]string{}, ps[:n]...), fmt.Sprintf("… %d more", len(ps)-n))
 }
 
 func add(m map[string]map[string]bool, k, v string) {
@@ -205,6 +249,19 @@ func Finalize(res *model.Result) {
 	// has already run by the time Finalize is called.
 	explainSignals(res.Rows)
 	res.Actions, res.ActionTotal = actions(res.Rows, res.MCP)
+	var installed, installedVuln int
+	for _, r := range res.Rows {
+		if r.Installed {
+			installed++
+			if len(r.Vulns) > 0 || len(r.Signals) > 0 {
+				installedVuln++
+			}
+		}
+	}
+	if installedVuln > 0 {
+		res.Recommendation.Caveats = append(res.Recommendation.Caveats,
+			fmt.Sprintf("%d component(s) were seen only inside installed trees (node_modules, .venv, …), %d of them with findings. They describe this machine, not the code's declared dependencies, and are left out of Act now.", installed, installedVuln))
+	}
 	res.Union = len(res.Rows)
 	res.Intersection = 0
 	for _, r := range res.Rows {

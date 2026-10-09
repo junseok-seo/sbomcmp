@@ -6,6 +6,7 @@ package cdx
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/junseok-seo/sbomcmp/internal/model"
@@ -28,6 +29,12 @@ type cdxMetadata struct {
 }
 
 type cdxComponent struct {
+	Evidence *struct {
+		Occurrences []struct {
+			Location string `json:"location"`
+		} `json:"occurrences"`
+		Identity json.RawMessage `json:"identity"`
+	} `json:"evidence"`
 	Type       string         `json:"type"`
 	BOMRef     string         `json:"bom-ref"`
 	Group      string         `json:"group"`
@@ -188,6 +195,7 @@ func walk(cs []cdxComponent, out *[]model.Component, skipped *int) {
 		}
 		comp := build(c.Purl, c.Group, c.Name, c.Version, c.Scope, props)
 		comp.Licenses = lics
+		comp.Paths = evidencePaths(c)
 		// cdxgen marks dev deps via properties; Syft via scope-less; Trivy via no marker.
 		if comp.Scope == "" {
 			for k, v := range props {
@@ -243,6 +251,61 @@ func build(rawPurl, group, name, version, scope string, props map[string]string)
 	}
 }
 
+// evidencePaths collects where the tool saw the component: syft's
+// syft:location:N:path properties, cdxgen's SrcFile property and
+// evidence.identity methods, and CycloneDX evidence.occurrences.
+func evidencePaths(c cdxComponent) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	for _, p := range c.Properties {
+		n := strings.ToLower(p.Name)
+		if (strings.HasPrefix(n, "syft:location:") && strings.HasSuffix(n, ":path")) || n == "srcfile" ||
+			strings.HasSuffix(n, ":filepath") || strings.HasSuffix(n, ":srcfile") {
+			add(p.Value)
+		}
+	}
+	if c.Evidence != nil {
+		for _, o := range c.Evidence.Occurrences {
+			add(o.Location)
+		}
+		if len(c.Evidence.Identity) > 0 {
+			// identity may be an object or an array of objects (CycloneDX 1.5 vs 1.6).
+			var items []struct {
+				Methods []struct {
+					Value string `json:"value"`
+				} `json:"methods"`
+			}
+			if err := json.Unmarshal(c.Evidence.Identity, &items); err != nil {
+				var one struct {
+					Methods []struct {
+						Value string `json:"value"`
+					} `json:"methods"`
+				}
+				if json.Unmarshal(c.Evidence.Identity, &one) == nil {
+					items = append(items, one)
+				}
+			}
+			for _, it := range items {
+				for _, m := range it.Methods {
+					if strings.Contains(m.Value, "/") || strings.Contains(m.Value, ".") {
+						add(m.Value)
+					}
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // dedupe collapses identical keys within one document (tools often list the
 // same package once per location/layer).
 func dedupe(in []model.Component) []model.Component {
@@ -250,8 +313,9 @@ func dedupe(in []model.Component) []model.Component {
 	out := make([]model.Component, 0, len(in))
 	for _, c := range in {
 		if i, ok := seen[c.Key]; ok {
-			// Merge licenses & keep first props.
+			// Merge licenses & paths, keep first props.
 			out[i].Licenses = mergeStr(out[i].Licenses, c.Licenses)
+			out[i].Paths = mergeStr(out[i].Paths, c.Paths)
 			if out[i].Scope == "" {
 				out[i].Scope = c.Scope
 			}
