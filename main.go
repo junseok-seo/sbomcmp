@@ -25,6 +25,7 @@ import (
 	"github.com/junseok-seo/sbomcmp/internal/gen"
 	"github.com/junseok-seo/sbomcmp/internal/mcp"
 	"github.com/junseok-seo/sbomcmp/internal/model"
+	"github.com/junseok-seo/sbomcmp/internal/osv"
 	"github.com/junseok-seo/sbomcmp/internal/report"
 	"github.com/junseok-seo/sbomcmp/internal/ui"
 	"github.com/junseok-seo/sbomcmp/internal/vuln"
@@ -108,6 +109,7 @@ func cmdScan(args []string) error {
 	vulnFixture := fs.String("vuln-fixture", "", "offline fixture JSON instead of any API")
 	vulnAll := fs.Bool("vuln-all", false, "query every component, not only disagreements")
 	vulnTimeout := fs.Duration("vuln-timeout", 60*time.Second, "HTTP timeout for vulnerability APIs")
+	vulnDetails := fs.Int("vuln-details", osv.DefaultMaxDetails, "max distinct advisories to fetch OSV details for (0 = unlimited)")
 	noMCP := fs.Bool("no-mcp", false, "skip MCP server discovery")
 	openUI := fs.Bool("ui", false, "open the viewer after scanning")
 	quiet := fs.Bool("q", false, "quiet")
@@ -201,7 +203,7 @@ func cmdScan(args []string) error {
 
 	vcfg := vuln.Config{
 		Source: *vulnSource, OSVEndpoint: *osvAPI, VDBEndpoint: *vdbAPI, VDBKey: *vulnKey,
-		Fixture: *vulnFixture, Timeout: *vulnTimeout, OnlyDisagreements: !*vulnAll, Log: log,
+		Fixture: *vulnFixture, Timeout: *vulnTimeout, OnlyDisagreements: !*vulnAll, OSVDetails: *vulnDetails, Log: log,
 	}
 	if vcfg.Resolve() == "none" {
 		res.Vuln.Source = "none"

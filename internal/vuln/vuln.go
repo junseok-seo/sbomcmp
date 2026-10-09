@@ -35,7 +35,10 @@ type Config struct {
 	Fixture           string // offline fixture path
 	Timeout           time.Duration
 	OnlyDisagreements bool // only query rows not seen by every tool
-	Log               func(string)
+	// OSVDetails caps how many distinct advisories the OSV source fetches
+	// details for (0 = unlimited). main passes --vuln-details.
+	OSVDetails int
+	Log        func(string)
 }
 
 // Resolve returns the effective source name.
@@ -115,14 +118,17 @@ func Enrich(ctx context.Context, cfg Config, rows []model.Row, meta *model.VulnM
 			key = cfg.VDBKey
 		}
 		c := osv.New(cfg.OSVEndpoint, key, cfg.Timeout)
+		c.MaxDetails = cfg.OSVDetails
 		meta.Endpoint = c.Endpoint
 		var st osv.Stats
+		started := time.Now()
 		st, err = c.Enrich(ctx, rows, idx, QueryPurl, "osv")
 		meta.Answered = st.Answered
 		meta.DetailsCapped = st.DetailsCapped
-		if st.DetailsCapped > 0 {
-			meta.Note = fmt.Sprintf("%d advisories were not scored (OSV detail cap of %d); shown as UNKNOWN", st.DetailsCapped, c.MaxDetails)
+		if err == nil {
+			cfg.Log(fmt.Sprintf("osv: %d of %d advisories scored in %s", st.Scored, st.Advisories, time.Since(started).Round(100*time.Millisecond)))
 		}
+		meta.Note = osvNote(st, c.MaxDetails)
 	}
 	if err != nil {
 		meta.Error = err.Error()
@@ -137,6 +143,23 @@ func Enrich(ctx context.Context, cfg Config, rows []model.Row, meta *model.VulnM
 			meta.Hits++
 		}
 	}
+}
+
+// osvNote explains advisories left at UNKNOWN: past the detail cap, failed
+// to fetch (rate limited or network), or both.
+func osvNote(st osv.Stats, cap int) string {
+	if st.DetailsCapped == 0 {
+		return ""
+	}
+	capped := st.DetailsCapped - st.DetailsFailed
+	var parts []string
+	if capped > 0 {
+		parts = append(parts, fmt.Sprintf("%d advisories were not scored (OSV detail cap of %d; raise with --vuln-details)", capped, cap))
+	}
+	if st.DetailsFailed > 0 {
+		parts = append(parts, fmt.Sprintf("%d advisory detail fetches failed after retries (OSV rate limit or network)", st.DetailsFailed))
+	}
+	return strings.Join(parts, "; ") + "; shown as UNKNOWN"
 }
 
 func fromVDB(ctx context.Context, c *vdb.Client, rows []model.Row, idx []int, meta *model.VulnMeta) error {
