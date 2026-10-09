@@ -88,13 +88,14 @@ Disagreement rows (components not every tool found) are checked against a vulner
 | `--vuln-source` | What happens |
 |---|---|
 | `auto` (default) | `vdb` when `VDB_API_KEY` is set, otherwise `osv` |
-| `osv` | [OSV](https://osv.dev) batch query plus per-advisory details (CVSS v3 and v4 scored locally; a server-side `vdb_severity` rating is preferred when present). No account needed. `--osv-api` points at any OSV-compatible server, including a VDB deployment (`--osv-api https://vdb.ai.kr` with `VDB_API_KEY`). |
+| `osv` | [OSV](https://osv.dev) batch query plus per-advisory details (CVSS v3 and v4 scored locally; a server-side `vdb_severity` rating is preferred when present). No account needed. `--osv-api` points at any OSV-compatible server, including a VDB deployment (`--osv-api https://vdb.ai.kr` with `VDB_API_KEY`). Details are fetched for up to 600 distinct advisories per scan (`--vuln-details N`, 0 = unlimited), disagreement rows first, 16 at a time; rate-limited fetches are retried after 1 s and 2 s. |
 | `vdb` | [VDB](https://vdb.ai.kr) `check-packages`: advisories with KEV/EPSS and malicious-release flags, plus the signals below. Works without a key on a quota of 100 packages per hour. |
 | `none` | skip enrichment (`--no-vuln`) |
 
 ```sh
 sbomcmp scan --no-vuln ./repo                        # skip entirely
 sbomcmp scan --vuln-all ./repo                       # query every component
+sbomcmp scan --vuln-details 0 ./repo                 # score every advisory OSV returns (no detail cap)
 sbomcmp scan --osv-api https://osv.example/ ./repo   # any OSV-compatible server
 sbomcmp scan --vuln-fixture fixtures.json ./repo     # offline fixture (tests, demos)
 ```
@@ -115,7 +116,7 @@ With VDB active:
 - Discovered MCP servers get a **Registry** column: trust tier, scopes, risk score, and recent scope changes. Servers VDB has never seen are marked unverified.
 - Advisories carry **KEV** and **EPSS** so a critical nobody exploits ranks below a medium that is being exploited, and **malicious releases** (MAL-* reports) are flagged as something to remove, not upgrade. The viewer sorts by KEV, then EPSS, then severity when VDB data is present, and the report's "Disagreements that matter" table gains an EPSS column.
 
-Coverage is always visible: the status strip under the verdict (and the `Vulnerability data:` line in the report) says which source answered, keyed or anonymous, how many of the queried rows got an answer, and what VDB added (KEV rows, rows with EPSS ≥ 10%, slopsquat signals, MCP registry hits). When the anonymous quota runs out mid-scan the strip turns amber and shows the fix; the same shortfall appears as a recommendation caveat. OSV runs that hit the per-advisory detail cap report how many advisories were left at UNKNOWN.
+Coverage is always visible: the status strip under the verdict (and the `Vulnerability data:` line in the report) says which source answered, keyed or anonymous, how many of the queried rows got an answer, and what VDB added (KEV rows, rows with EPSS ≥ 10%, slopsquat signals, MCP registry hits). When the anonymous quota runs out mid-scan the strip turns amber and shows the fix; the same shortfall appears as a recommendation caveat. OSV runs log `osv: N of M advisories scored`; advisories past the detail cap or whose fetch failed after retries are counted and shown as UNKNOWN.
 
 Without a key, sbomcmp behaves exactly as before against public OSV. `VDB_API_URL` or `--vdb-api` points at a self-hosted deployment.
 

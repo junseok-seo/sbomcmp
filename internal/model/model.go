@@ -180,8 +180,9 @@ type VulnMeta struct {
 	Answered   int    `json:"answered"`             // rows the source actually answered (== Queried when complete)
 	FirstParty int    `json:"firstParty,omitempty"` // rows skipped because the project declares them itself
 	Hits       int    `json:"hits"`
-	// DetailsCapped counts advisories left at UNKNOWN severity because the
-	// OSV per-advisory detail fetch cap was hit (osv source only).
+	// DetailsCapped counts distinct advisories left at UNKNOWN severity by
+	// the osv source: past the per-advisory detail cap (--vuln-details), or
+	// their detail fetch failed even after retrying rate limits.
 	DetailsCapped int    `json:"detailsCapped,omitempty"`
 	Error         string `json:"error,omitempty"`
 	Note          string `json:"note,omitempty"`
