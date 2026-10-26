@@ -10,13 +10,13 @@ pypi/cryptography@42.0.0
 pypi/flask-login@0.6.3
 pypi/flask@3.0.2
 pypi/idna@3.9.0
-pypi/importlib-metadata@9.0.1
+pypi/importlib-metadata@9.1.0
 pypi/itsdangerous@2.2.0
 pypi/jinja2@3.1.6
 pypi/markupsafe@3.0.4
-pypi/pycparser@3.1.0
+pypi/pycparser@3.12.0
 pypi/pyyaml@6.0.1
 pypi/requests@2.31.0
 pypi/urllib3@2.8.0
 pypi/werkzeug@3.1.9
-pypi/zipp@4.1.1
+pypi/zipp@4.1.2
